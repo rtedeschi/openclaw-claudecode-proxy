@@ -39,6 +39,13 @@ Modes:
 EOF
 }
 
+pause_if_interactive() {
+        if [ -t 0 ] && [ -t 1 ]; then
+                read -r -n 1 -s -p "Press any key to continue . . . "
+                echo ""
+        fi
+}
+
 require_command() {
     if ! command -v "$1" > /dev/null 2>&1; then
         echo "❌ Required command not found: $1"
@@ -277,6 +284,7 @@ install_proxy() {
 case "$MODE" in
     install)
         install_proxy
+        pause_if_interactive
         ;;
     serve)
         run_proxy
