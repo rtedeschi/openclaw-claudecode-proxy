@@ -6,22 +6,32 @@ Route Anthropic Messages API requests through the real Claude Code CLI so OpenCl
 
 - `Core/claude-code-proxy.js`: Shared Node.js proxy implementation.
 - `Ubuntu/claude-code-proxy.sh`: Single Linux entrypoint that installs the proxy, patches `openclaw.json`, installs a user `systemd` service, and runs the proxy in `serve` mode.
+- `Windows/claude-code-proxy.bat`: Single Windows entrypoint that installs the proxy, patches `openclaw.json`, registers a startup task, and runs the proxy in `serve` mode.
 
 ## Requirements
 
-This setup assumes a Linux machine using the Ubuntu-oriented script in this repo.
+This repo includes separate entrypoints for Linux and Windows.
 
 Required tools:
 
 - `claude` CLI installed and authenticated
 - `node`
-- `jq`
-- `systemctl` for automatic background startup as a user service
 - `openclaw` already installed and initialized
+
+Linux install also requires:
+
+- `jq`
+- `systemctl`
+
+Windows install also requires:
+
+- `powershell`
+- `schtasks`
 
 Required OpenClaw files:
 
 - `~/.openclaw/openclaw.json`
+- `%USERPROFILE%\.openclaw\openclaw.json`
 
 The setup script will stop if `~/.openclaw/openclaw.json` does not exist. If needed, run:
 
@@ -39,6 +49,8 @@ If that fails, run `claude` once and complete authentication first.
 
 ## Installation
 
+### Linux
+
 From this repository:
 
 ```bash
@@ -52,20 +64,35 @@ To use a different local port:
 ./Ubuntu/claude-code-proxy.sh install 8788
 ```
 
+### Windows
+
+From this repository in `cmd.exe`:
+
+```bat
+Windows\claude-code-proxy.bat
+```
+
+To use a different local port:
+
+```bat
+Windows\claude-code-proxy.bat install 8788
+```
+
 ## What the script does
 
-`Ubuntu/claude-code-proxy.sh` in `install` mode performs the following actions:
+The platform entrypoint in `install` mode performs the following actions:
 
-1. Verifies `jq`, `node`, and `claude` are installed.
+1. Verifies the required platform tools, `node`, and `claude` are installed.
 2. Verifies Claude Code CLI is working.
-3. Verifies `systemctl` is available for a persistent user service.
-4. Backs up `~/.openclaw/openclaw.json` with a timestamp suffix.
-5. Copies the script and shared JS entrypoint to `~/.openclaw/workspace/scripts/`.
-6. Adds or updates `models.providers["claude-code-proxy"]` in `~/.openclaw/openclaw.json`.
-7. Adds alias entries for `claude-code-proxy/claude-opus-4-5` and `claude-code-proxy/claude-sonnet-4-5`.
-8. Installs a user `systemd` service at `~/.config/systemd/user/claude-code-proxy.service`.
-9. Enables and starts that service on port `8787` by default.
-10. Attempts to restart the OpenClaw gateway.
+3. Backs up `openclaw.json` with a timestamp suffix.
+4. Copies the platform script and shared JS entrypoint to `~/.openclaw/workspace/scripts/` on Linux or `%USERPROFILE%\.openclaw\workspace\scripts\` on Windows.
+5. Adds or updates `models.providers["claude-code-proxy"]` in `openclaw.json`.
+6. Adds alias entries for `claude-code-proxy/claude-opus-4-5` and `claude-code-proxy/claude-sonnet-4-5`.
+7. Installs persistent startup:
+Linux uses a user `systemd` service.
+Windows uses a Scheduled Task named `ClaudeCodeProxy`.
+8. Starts the background service or task on port `8787` by default.
+9. Attempts to restart the OpenClaw gateway.
 
 The script does not automatically change `agents.defaults.model.primary`.
 It prints a suggestion to set it to one of the proxy-backed models after install.
@@ -96,10 +123,22 @@ Check the proxy service:
 systemctl --user status claude-code-proxy.service
 ```
 
+On Windows, check the startup task:
+
+```bat
+schtasks /Query /TN "ClaudeCodeProxy"
+```
+
 Restart it manually if needed:
 
 ```bash
 systemctl --user restart claude-code-proxy.service
+```
+
+On Windows, start it manually if needed:
+
+```bat
+schtasks /Run /TN "ClaudeCodeProxy"
 ```
 
 Restart OpenClaw if it did not restart automatically:
@@ -130,11 +169,23 @@ Or on a custom port:
 ./Ubuntu/claude-code-proxy.sh serve 8788
 ```
 
+On Windows, run the proxy directly:
+
+```bat
+Windows\claude-code-proxy.bat serve
+```
+
+Or on a custom port:
+
+```bat
+Windows\claude-code-proxy.bat serve 8788
+```
+
 The service uses the same script in `serve` mode, so install and runtime now share a single entrypoint.
 
 ## Notes
 
 - The proxy only handles `POST /v1/messages`.
-- Session state is stored in `/tmp/claude-code-proxy-state.json`.
-- Debug logs are written to `/tmp/claude-code-proxy-debug.log`.
+- Session state is stored in the system temp directory as `claude-code-proxy-state.json`.
+- Debug logs are written to the system temp directory as `claude-code-proxy-debug.log`.
 - The proxy limits Claude Code tool access to a restricted allowlist suitable for this bridge.

@@ -2,10 +2,13 @@ const http = require('http');
 const { spawn } = require('child_process');
 const fs = require('fs');
 const crypto = require('crypto');
+const os = require('os');
+const path = require('path');
 
 const PORT = process.env.PORT || 8787;
-const DEBUG_LOG = '/tmp/claude-code-proxy-debug.log';
-const SESSION_STATE_PATH = '/tmp/claude-code-proxy-state.json';
+const TEMP_DIR = os.tmpdir();
+const DEBUG_LOG = path.join(TEMP_DIR, 'claude-code-proxy-debug.log');
+const SESSION_STATE_PATH = path.join(TEMP_DIR, 'claude-code-proxy-state.json');
 const SESSION_TTL_MS = 6 * 60 * 60 * 1000;
 const CLAUDE_ALLOWED_TOOLS = ['Read', 'Edit', 'Write', 'Bash', 'Grep', 'Glob', 'TodoWrite'];
 const CLAUDE_DISALLOWED_TOOLS = [
