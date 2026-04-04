@@ -5,6 +5,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CURRENT_SCRIPT="${SCRIPT_DIR}/$(basename "$0")"
+export PATH="${HOME}/.local/bin:${HOME}/.npm-global/bin:${HOME}/.bun/bin:${HOME}/bin:${PATH}"
 OPENCLAW_HOME="${HOME}/.openclaw"
 OPENCLAW_CONFIG="${OPENCLAW_HOME}/openclaw.json"
 INSTALL_DIR="${OPENCLAW_HOME}/workspace/scripts"

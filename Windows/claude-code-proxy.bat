@@ -50,6 +50,7 @@ echo.
 echo Modes:
 echo   install  Install the proxy, patch openclaw.json, register a startup task, and start it.
 echo   serve    Run the proxy in the foreground. This is the mode used by the scheduled task.
+pause
 exit /b 1
 
 :require_command
@@ -217,4 +218,5 @@ call :install_startup_task || exit /b 1
 call :start_task
 call :restart_gateway
 call :print_summary
+pause
 exit /b 0

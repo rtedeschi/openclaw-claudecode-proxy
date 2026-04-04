@@ -281,9 +281,34 @@ function cloneMessage(message) {
     return JSON.parse(JSON.stringify(message));
 }
 
+function sanitizeResumeContent(content) {
+    if (typeof content === 'string') {
+        return content;
+    }
+
+    if (!Array.isArray(content)) {
+        return '';
+    }
+
+    const textBlocks = content
+        .filter((block) => block && block.type === 'text' && typeof block.text === 'string')
+        .map((block) => ({
+            type: 'text',
+            text: block.text
+        }));
+
+    if (textBlocks.length > 0) {
+        return textBlocks;
+    }
+
+    const serialized = serializeContent(content);
+    return serialized ? [{ type: 'text', text: serialized }] : [];
+}
+
 function normalizeUserMessage(message) {
     const normalized = cloneMessage(message);
     normalized.role = 'user';
+    normalized.content = sanitizeResumeContent(normalized.content);
     return normalized;
 }
 
