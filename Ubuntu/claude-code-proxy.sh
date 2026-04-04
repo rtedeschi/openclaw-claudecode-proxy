@@ -46,6 +46,16 @@ pause_if_interactive() {
         fi
 }
 
+on_exit_pause_if_needed() {
+    local status=$?
+
+    if [ "$status" -ne 0 ] && [ "${MODE:-install}" != "serve" ]; then
+        pause_if_interactive
+    fi
+}
+
+trap on_exit_pause_if_needed EXIT
+
 require_command() {
     if ! command -v "$1" > /dev/null 2>&1; then
         echo "❌ Required command not found: $1"

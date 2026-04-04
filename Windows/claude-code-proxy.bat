@@ -31,6 +31,9 @@ if not defined NON_NUMERIC (
 )
 set "NON_NUMERIC="
 
+set "SHOULD_PAUSE=1"
+if /I "%MODE%"=="serve" set "SHOULD_PAUSE="
+
 if /I "%MODE%"=="help" goto :usage
 if /I "%MODE%"=="--help" goto :usage
 if /I "%MODE%"=="-h" goto :usage
@@ -50,13 +53,18 @@ echo.
 echo Modes:
 echo   install  Install the proxy, patch openclaw.json, register a startup task, and start it.
 echo   serve    Run the proxy in the foreground. This is the mode used by the scheduled task.
-pause
+call :pause_if_requested
 exit /b 1
+
+:pause_if_requested
+if defined SHOULD_PAUSE pause
+exit /b 0
 
 :require_command
 where "%~1" >nul 2>nul
 if errorlevel 1 (
     echo Required command not found: %~1
+    call :pause_if_requested
     exit /b 1
 )
 exit /b 0
@@ -65,6 +73,7 @@ exit /b 0
 claude --version >nul 2>nul
 if errorlevel 1 (
     echo Claude Code CLI is installed but not usable. Run "claude" to finish setup.
+    call :pause_if_requested
     exit /b 1
 )
 exit /b 0
@@ -75,6 +84,7 @@ if exist "%SCRIPT_DIR%\Core\claude-code-proxy.js" set "RESOLVED_PROXY_JS=%SCRIPT
 if not defined RESOLVED_PROXY_JS if exist "%SCRIPT_DIR%\..\Core\claude-code-proxy.js" set "RESOLVED_PROXY_JS=%SCRIPT_DIR%\..\Core\claude-code-proxy.js"
 if defined RESOLVED_PROXY_JS exit /b 0
 echo Shared proxy entrypoint not found next to the script or in ..\Core
+call :pause_if_requested
 exit /b 1
 
 :backup_openclaw_config
@@ -83,6 +93,7 @@ for /f %%I in ('powershell -NoProfile -Command "Get-Date -Format yyyyMMdd_HHmmss
 copy "%OPENCLAW_CONFIG%" "%OPENCLAW_CONFIG%.backup.%BACKUP_TIMESTAMP%" >nul
 if errorlevel 1 (
     echo Failed to back up %OPENCLAW_CONFIG%
+    call :pause_if_requested
     exit /b 1
 )
 echo Backed up %OPENCLAW_CONFIG%
@@ -95,11 +106,13 @@ mkdir "%INSTALL_CORE_DIR%" >nul 2>nul
 copy "%~f0" "%INSTALLED_SCRIPT%" >nul
 if errorlevel 1 (
     echo Failed to install script at %INSTALLED_SCRIPT%
+    call :pause_if_requested
     exit /b 1
 )
 copy "%RESOLVED_PROXY_JS%" "%INSTALLED_PROXY_JS%" >nul
 if errorlevel 1 (
     echo Failed to install proxy JS at %INSTALLED_PROXY_JS%
+    call :pause_if_requested
     exit /b 1
 )
 echo Installed script at %INSTALLED_SCRIPT%
@@ -124,6 +137,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$json | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $path -Encoding UTF8"
 if errorlevel 1 (
     echo Failed to patch %OPENCLAW_CONFIG%
+        call :pause_if_requested
     exit /b 1
 )
 echo Patched %OPENCLAW_CONFIG%
@@ -133,6 +147,7 @@ exit /b 0
 schtasks /Create /F /TN "%TASK_NAME%" /SC ONLOGON /TR "\"%INSTALLED_SCRIPT%\" serve %PORT%" >nul
 if errorlevel 1 (
     echo Failed to register scheduled task %TASK_NAME%
+    call :pause_if_requested
     exit /b 1
 )
 echo Installed scheduled task %TASK_NAME%
@@ -143,6 +158,7 @@ schtasks /Run /TN "%TASK_NAME%" >nul
 if errorlevel 1 (
     echo Could not start scheduled task automatically.
     echo Run manually: schtasks /Run /TN "%TASK_NAME%"
+    call :pause_if_requested
     exit /b 1
 )
 echo Started scheduled task %TASK_NAME%
@@ -204,6 +220,7 @@ echo.
 if not exist "%OPENCLAW_CONFIG%" (
     echo OpenClaw config not found at %OPENCLAW_CONFIG%
     echo Run "openclaw wizard" first on the target machine.
+    call :pause_if_requested
     exit /b 1
 )
 call :require_command claude || exit /b 1
@@ -218,5 +235,5 @@ call :install_startup_task || exit /b 1
 call :start_task
 call :restart_gateway
 call :print_summary
-pause
+call :pause_if_requested
 exit /b 0
