@@ -4,12 +4,12 @@ Route Anthropic Messages API requests through the real Claude Code CLI so OpenCl
 
 ## What this repo contains
 
-- `Ubuntu/claude-code-proxy.sh`: Starts a local HTTP proxy on port `8787` by default.
-- `Ubuntu/claude-code-proxy-setup.sh`: Installs the proxy into `~/.openclaw`, registers a user `systemd` service, and patches OpenClaw config to use the proxy provider.
+- `Core/claude-code-proxy.js`: Shared Node.js proxy implementation.
+- `Ubuntu/claude-code-proxy.sh`: Single Linux entrypoint that installs the proxy, patches `openclaw.json`, installs a user `systemd` service, and runs the proxy in `serve` mode.
 
 ## Requirements
 
-This setup assumes a Linux machine using the Ubuntu-oriented scripts in this repo.
+This setup assumes a Linux machine using the Ubuntu-oriented script in this repo.
 
 Required tools:
 
@@ -42,38 +42,45 @@ If that fails, run `claude` once and complete authentication first.
 From this repository:
 
 ```bash
-cd Ubuntu
-chmod +x claude-code-proxy.sh claude-code-proxy-setup.sh
-./claude-code-proxy-setup.sh
+chmod +x Ubuntu/claude-code-proxy.sh
+./Ubuntu/claude-code-proxy.sh
 ```
 
 To use a different local port:
 
 ```bash
-cd Ubuntu
-PROXY_PORT=8788 ./claude-code-proxy-setup.sh
+./Ubuntu/claude-code-proxy.sh install 8788
 ```
 
-## What the setup script does
+## What the script does
 
-`Ubuntu/claude-code-proxy-setup.sh` performs the following actions:
+`Ubuntu/claude-code-proxy.sh` in `install` mode performs the following actions:
 
 1. Verifies `jq`, `node`, and `claude` are installed.
 2. Verifies Claude Code CLI is working.
-3. Backs up existing OpenClaw config files with a timestamp suffix.
-4. Copies the proxy script to `~/.openclaw/workspace/scripts/claude-code-proxy.sh`.
-5. Installs a user `systemd` service at `~/.config/systemd/user/claude-code-proxy.service`.
-6. Enables and starts that service when possible.
-7. Patches `~/.openclaw/openclaw.json` to add a `claude-code` provider pointing at `http://localhost:<port>`.
-8. Patches `~/.openclaw/agents/main/agent/models.json` to register the same provider at runtime.
-9. Attempts to restart the OpenClaw gateway.
+3. Verifies `systemctl` is available for a persistent user service.
+4. Backs up `~/.openclaw/openclaw.json` with a timestamp suffix.
+5. Copies the script and shared JS entrypoint to `~/.openclaw/workspace/scripts/`.
+6. Adds or updates `models.providers["claude-code-proxy"]` in `~/.openclaw/openclaw.json`.
+7. Adds alias entries for `claude-code-proxy/claude-opus-4-5` and `claude-code-proxy/claude-sonnet-4-5`.
+8. Installs a user `systemd` service at `~/.config/systemd/user/claude-code-proxy.service`.
+9. Enables and starts that service on port `8787` by default.
+10. Attempts to restart the OpenClaw gateway.
+
+The script does not automatically change `agents.defaults.model.primary`.
+It prints a suggestion to set it to one of the proxy-backed models after install.
 
 ## Installed model mapping
 
-After setup, OpenClaw is configured to use:
+After setup, OpenClaw has this proxy provider available:
 
-- Primary: `claude-code/claude-opus-4-5`
-- Fallback: `claude-code/claude-sonnet-4-5`
+- Provider: `claude-code-proxy`
+- Available model IDs: `claude-code-proxy/claude-opus-4-5` and `claude-code-proxy/claude-sonnet-4-5`
+
+Suggested default model change:
+
+- `agents.defaults.model.primary = claude-code-proxy/claude-opus-4-5`
+- or `agents.defaults.model.primary = claude-code-proxy/claude-sonnet-4-5`
 
 The proxy also normalizes these requested model names if they are sent by clients:
 
@@ -114,16 +121,16 @@ If you used a custom `PROXY_PORT`, substitute that value.
 If you do not want to use the `systemd` service, you can run the proxy directly:
 
 ```bash
-cd Ubuntu
-./claude-code-proxy.sh
+./Ubuntu/claude-code-proxy.sh serve
 ```
 
 Or on a custom port:
 
 ```bash
-cd Ubuntu
-./claude-code-proxy.sh 8788
+./Ubuntu/claude-code-proxy.sh serve 8788
 ```
+
+The service uses the same script in `serve` mode, so install and runtime now share a single entrypoint.
 
 ## Notes
 

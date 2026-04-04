@@ -1,761 +1,292 @@
 #!/bin/bash
-# Claude Code Proxy - Route requests through the real Claude Code CLI
-#
-# This script acts as an HTTP proxy that forwards Anthropic API requests
-# through the Claude Code CLI, which adds native client attestation.
-#
-# Usage: ./claude-code-proxy.sh [port]
-#
-# Requires:
-#   - Claude Code CLI installed and authenticated (claude --version)
-#   - Node.js for the HTTP server
-#   - jq for JSON processing
+# Claude Code Proxy installer and service entrypoint for OpenClaw.
 
-set -e
+set -euo pipefail
 
-PORT="${1:-8787}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-export PORT
+CURRENT_SCRIPT="${SCRIPT_DIR}/$(basename "$0")"
+OPENCLAW_HOME="${HOME}/.openclaw"
+OPENCLAW_CONFIG="${OPENCLAW_HOME}/openclaw.json"
+INSTALL_DIR="${OPENCLAW_HOME}/workspace/scripts"
+INSTALL_CORE_DIR="${INSTALL_DIR}/Core"
+INSTALLED_SCRIPT="${INSTALL_DIR}/claude-code-proxy.sh"
+INSTALLED_PROXY_JS="${INSTALL_CORE_DIR}/claude-code-proxy.js"
+SYSTEMD_USER_DIR="${HOME}/.config/systemd/user"
+SYSTEMD_SERVICE_NAME="claude-code-proxy.service"
+SYSTEMD_SERVICE_PATH="${SYSTEMD_USER_DIR}/${SYSTEMD_SERVICE_NAME}"
+TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
+DEFAULT_PORT="${PROXY_PORT:-8787}"
 
-# Check prerequisites
-if ! command -v claude &> /dev/null; then
-    echo "❌ Claude Code CLI not found. Install with: npm install -g @anthropic-ai/claude-code"
-    exit 1
+MODE="${1:-install}"
+PORT="${2:-$DEFAULT_PORT}"
+
+if [[ "$MODE" =~ ^[0-9]+$ ]]; then
+    PORT="$MODE"
+    MODE="install"
 fi
 
-if ! command -v node &> /dev/null; then
-    echo "❌ Node.js not found"
+usage() {
+    cat <<EOF
+Usage:
+  ./claude-code-proxy.sh
+  ./claude-code-proxy.sh install [port]
+  ./claude-code-proxy.sh serve [port]
+
+Modes:
+  install  Install the proxy, patch openclaw.json, install the user service, and start it.
+  serve    Run the proxy in the foreground. This is the mode used by systemd.
+EOF
+}
+
+require_command() {
+    if ! command -v "$1" > /dev/null 2>&1; then
+        echo "❌ Required command not found: $1"
+        exit 1
+    fi
+}
+
+verify_claude() {
+    if ! claude --version > /dev/null 2>&1; then
+        echo "❌ Claude Code CLI is installed but not usable. Run 'claude' to finish setup."
+        exit 1
+    fi
+}
+
+resolve_proxy_js() {
+    local local_core="${SCRIPT_DIR}/Core/claude-code-proxy.js"
+    local repo_core="${SCRIPT_DIR}/../Core/claude-code-proxy.js"
+
+    if [ -f "$local_core" ]; then
+        printf '%s\n' "$local_core"
+        return 0
+    fi
+
+    if [ -f "$repo_core" ]; then
+        printf '%s\n' "$repo_core"
+        return 0
+    fi
+
+    echo "❌ Shared proxy entrypoint not found next to the script or in ../Core" >&2
     exit 1
-fi
-
-# Verify Claude Code is authenticated
-if ! claude --version &> /dev/null; then
-    echo "❌ Claude Code not working. Run 'claude' to authenticate."
-    exit 1
-fi
-
-echo "🚀 Starting Claude Code Proxy on port $PORT"
-echo "   Requests will be forwarded through the real Claude Code CLI"
-echo "   Press Ctrl+C to stop"
-echo ""
-
-# Create the Node.js proxy server
-node << 'PROXY_SERVER'
-const http = require('http');
-const { spawn } = require('child_process');
-const fs = require('fs');
-const crypto = require('crypto');
-
-const PORT = process.env.PORT || 8787;
-const DEBUG_LOG = '/tmp/claude-code-proxy-debug.log';
-const SESSION_STATE_PATH = '/tmp/claude-code-proxy-state.json';
-const SESSION_TTL_MS = 6 * 60 * 60 * 1000;
-const CLAUDE_ALLOWED_TOOLS = ['Read', 'Edit', 'Write', 'Bash', 'Grep', 'Glob', 'TodoWrite'];
-const CLAUDE_DISALLOWED_TOOLS = [
-    'mcp__claude_ai_Gmail__authenticate',
-    'mcp__claude_ai_Google_Calendar__authenticate'
-];
-
-function isExpiredSession(entry, now = Date.now()) {
-    if (!entry || typeof entry !== 'object') {
-        return true;
-    }
-
-    if (typeof entry.updatedAt !== 'string' || !entry.updatedAt) {
-        return true;
-    }
-
-    const updatedAtMs = Date.parse(entry.updatedAt);
-    if (Number.isNaN(updatedAtMs)) {
-        return true;
-    }
-
-    return now - updatedAtMs > SESSION_TTL_MS;
 }
 
-function pruneExpiredSessions(state, now = Date.now()) {
-    const sessions = state && state.sessions && typeof state.sessions === 'object'
-        ? state.sessions
-        : {};
-    const prunedSessions = {};
-    let removedCount = 0;
+backup_file() {
+    local file_path="$1"
 
-    for (const [key, value] of Object.entries(sessions)) {
-        if (isExpiredSession(value, now)) {
-            removedCount += 1;
-            continue;
-        }
-
-        prunedSessions[key] = value;
-    }
-
-    return {
-        state: { sessions: prunedSessions },
-        removedCount
-    };
+    if [ -f "$file_path" ]; then
+        cp "$file_path" "${file_path}.backup.${TIMESTAMP}"
+        echo "✅ Backed up $file_path"
+    fi
 }
 
-function loadSessionState() {
-    try {
-        const raw = fs.readFileSync(SESSION_STATE_PATH, 'utf8');
-        const parsed = JSON.parse(raw);
-        if (parsed && typeof parsed === 'object' && parsed.sessions && typeof parsed.sessions === 'object') {
-            return pruneExpiredSessions(parsed).state;
-        }
-    } catch (error) {
-        // Ignore missing or invalid state.
-    }
+install_files() {
+    local source_proxy_js
+    source_proxy_js="$(resolve_proxy_js)"
 
-    return { sessions: {} };
+    mkdir -p "$INSTALL_CORE_DIR"
+
+    if [ "$CURRENT_SCRIPT" != "$INSTALLED_SCRIPT" ]; then
+        cp "$CURRENT_SCRIPT" "$INSTALLED_SCRIPT"
+    fi
+
+    if [ "$source_proxy_js" != "$INSTALLED_PROXY_JS" ]; then
+        cp "$source_proxy_js" "$INSTALLED_PROXY_JS"
+    fi
+
+    chmod +x "$INSTALLED_SCRIPT"
+
+    echo "✅ Installed script at $INSTALLED_SCRIPT"
+    echo "✅ Installed proxy JS at $INSTALLED_PROXY_JS"
 }
 
-let sessionState = loadSessionState();
+patch_openclaw_config() {
+    local tmp_file
+    tmp_file="$(mktemp)"
 
-function persistSessionState() {
-    try {
-        sessionState = pruneExpiredSessions(sessionState).state;
-        fs.writeFileSync(SESSION_STATE_PATH, JSON.stringify(sessionState, null, 2));
-    } catch (error) {
-        debugLog({
-            event: 'session_state_write_failed',
-            error: error.message
-        });
-    }
-}
-
-function debugLog(payload) {
-    try {
-        fs.appendFileSync(DEBUG_LOG, `${JSON.stringify({ timestamp: new Date().toISOString(), ...payload })}\n`);
-    } catch (error) {
-        // Ignore debug logging failures.
-    }
-}
-
-function normalizeUsage(usage) {
-    if (!usage) {
-        return {
-            input_tokens: 0,
-            output_tokens: 0,
-            cache_creation_input_tokens: 0,
-            cache_read_input_tokens: 0
-        };
-    }
-
-    return {
-        input_tokens: usage.input_tokens || 0,
-        output_tokens: usage.output_tokens || 0,
-        cache_creation_input_tokens: usage.cache_creation_input_tokens || 0,
-        cache_read_input_tokens: usage.cache_read_input_tokens || 0
-    };
-}
-
-function extractText(content) {
-    if (typeof content === 'string') {
-        return content;
-    }
-
-    if (!Array.isArray(content)) {
-        return '';
-    }
-
-    return content
-        .filter((block) => block && block.type === 'text' && typeof block.text === 'string')
-        .map((block) => block.text)
-        .join('');
-}
-
-function serializeContent(content) {
-    if (typeof content === 'string') {
-        return content;
-    }
-
-    if (!Array.isArray(content)) {
-        return '';
-    }
-
-    return content
-        .map((block) => {
-            if (!block || typeof block !== 'object') {
-                return '';
-            }
-
-            if (block.type === 'text' && typeof block.text === 'string') {
-                return block.text;
-            }
-
-            if (block.type === 'tool_use') {
-                return `[tool_use:${block.name || 'unknown'}]\n${JSON.stringify(block.input || {})}`;
-            }
-
-            if (block.type === 'tool_result') {
-                return `[tool_result]\n${serializeContent(block.content)}`;
-            }
-
-            if (block.type === 'image') {
-                return '[image omitted]';
-            }
-
-            return `[${block.type || 'unknown'} omitted]`;
-        })
-        .filter(Boolean)
-        .join('\n');
-}
-
-function extractSystemText(system) {
-    if (typeof system === 'string') {
-        return system;
-    }
-
-    if (Array.isArray(system)) {
-        return serializeContent(system);
-    }
-
-    return '';
-}
-
-function buildToolBridgeNotice() {
-    return [
-        'Proxy tool mode:',
-        '- Available executable tools in this session are limited to read, edit, write, exec/bash, grep, glob, and todo writing.',
-        '- Do not call browser, canvas, nodes, cron, Gmail auth, Calendar auth, or other upstream OpenClaw-only tools through this Claude session.',
-        '- If a requested action needs an unavailable tool family, answer directly and state the limitation instead of attempting the tool.'
-    ].join('\n');
-}
-
-function getHeaderValue(headers, name) {
-    const value = headers[name];
-    if (Array.isArray(value)) {
-        return value[0] || null;
-    }
-    return typeof value === 'string' && value.trim() ? value.trim() : null;
-}
-
-function hashText(value) {
-    return crypto.createHash('sha256').update(value).digest('hex').slice(0, 16);
-}
-
-function buildHistoryLookupKey(request, messages) {
-    if (!Array.isArray(messages) || messages.length === 0) {
-        return null;
-    }
-
-    const systemText = extractSystemText(request.system || null);
-    const transcript = messages
-        .map((message) => {
-            const role = message && typeof message.role === 'string' ? message.role : 'unknown';
-            const content = message && Object.prototype.hasOwnProperty.call(message, 'content')
-                ? serializeContent(message.content)
-                : '';
-            return `${role.toUpperCase()}:\n${content}`;
-        })
-        .join('\n\n');
-
-    return `history:${hashText(`${systemText}\n\n${transcript}`)}`;
-}
-
-function getSessionLookupKey(req, request) {
-    const headerSessionId =
-        getHeaderValue(req.headers, 'session_id') ||
-        getHeaderValue(req.headers, 'x-session-id') ||
-        getHeaderValue(req.headers, 'x-openclaw-session-id');
-
-    if (headerSessionId) {
-        return `header:${headerSessionId}`;
-    }
-
-    const metadataSessionId = request && request.metadata && typeof request.metadata.session_id === 'string'
-        ? request.metadata.session_id.trim()
-        : null;
-
-    if (metadataSessionId) {
-        return `metadata:${metadataSessionId}`;
-    }
-
-    const messages = Array.isArray(request.messages) ? request.messages : [];
-    const priorMessages = messages.slice(0, -1);
-
-    return buildHistoryLookupKey(request, priorMessages);
-}
-
-function buildNextSessionLookupKey(request, assistantMessage) {
-    const messages = Array.isArray(request.messages) ? request.messages : [];
-    if (messages.length === 0 || !assistantMessage) {
-        return null;
-    }
-
-    const nextMessages = messages.concat([
-        {
-            role: 'assistant',
-            content: assistantMessage.content
-        }
-    ]);
-
-    return buildHistoryLookupKey(request, nextMessages);
-}
-
-function saveSessionMapping(sessionLookupKey, nextSessionLookupKey, claudeSessionId, effectiveModel) {
-    if (!claudeSessionId) {
-        return;
-    }
-
-    sessionState = pruneExpiredSessions(sessionState).state;
-
-    const value = {
-        claudeSessionId,
-        effectiveModel,
-        updatedAt: new Date().toISOString()
-    };
-
-    if (sessionLookupKey) {
-        sessionState.sessions[sessionLookupKey] = value;
-    }
-
-    if (nextSessionLookupKey) {
-        sessionState.sessions[nextSessionLookupKey] = value;
-    }
-
-    persistSessionState();
-}
-
-function cloneMessage(message) {
-    return JSON.parse(JSON.stringify(message));
-}
-
-function normalizeUserMessage(message) {
-    const normalized = cloneMessage(message);
-    normalized.role = 'user';
-    return normalized;
-}
-
-function normalizeRequestedModel(model) {
-    if (typeof model !== 'string' || !model.trim()) {
-        return 'opus';
-    }
-
-    const normalized = model.trim();
-    const modelMap = {
-        'claude-opus-4-6': 'claude-opus-4-5',
-        'claude-sonnet-4-6': 'claude-sonnet-4-5',
-        'claude-haiku-4-6': 'claude-haiku-4-5'
-    };
-
-    return modelMap[normalized] || normalized;
-}
-
-function buildSdkInput(request, options) {
-    const messages = Array.isArray(request.messages) ? request.messages : [];
-    const lastUserIndex = [...messages]
-        .map((message, index) => ({ message, index }))
-        .filter(({ message }) => message && message.role === 'user')
-        .map(({ index }) => index)
-        .pop();
-
-    if (lastUserIndex == null) {
-        return { error: 'No user message found' };
-    }
-
-    const lastUserMsg = messages[lastUserIndex];
-    const priorMessages = messages.slice(0, lastUserIndex);
-    const systemText = extractSystemText(request.system);
-    const resumedClaudeSessionId = options && options.claudeSessionId ? options.claudeSessionId : null;
-
-    if (resumedClaudeSessionId) {
-        return {
-            sdkInput: [
+    jq \
+        --arg proxy_port "$PORT" \
+        '
+        def proxy_models:
+            [
                 {
-                    type: 'user',
-                    message: normalizeUserMessage(lastUserMsg),
-                    parent_tool_use_id: null,
-                    session_id: resumedClaudeSessionId
+                    "id": "claude-opus-4-5",
+                    "name": "Claude Opus 4.5 (Proxy)",
+                    "api": "anthropic-messages",
+                    "reasoning": false,
+                    "input": ["text"],
+                    "cost": {
+                        "input": 0,
+                        "output": 0,
+                        "cacheRead": 0,
+                        "cacheWrite": 0
+                    },
+                    "contextWindow": 200000,
+                    "maxTokens": 8192
+                },
+                {
+                    "id": "claude-sonnet-4-5",
+                    "name": "Claude Sonnet 4.5 (Proxy)",
+                    "api": "anthropic-messages",
+                    "reasoning": false,
+                    "input": ["text"],
+                    "cost": {
+                        "input": 0,
+                        "output": 0,
+                        "cacheRead": 0,
+                        "cacheWrite": 0
+                    },
+                    "contextWindow": 200000,
+                    "maxTokens": 8192
                 }
-            ],
-            mode: 'resume'
-        };
-    }
+            ];
 
-    const sections = [];
-
-    if (systemText) {
-        sections.push(`System instructions:\n${systemText}\n\n${buildToolBridgeNotice()}`);
-    } else {
-        sections.push(`System instructions:\n${buildToolBridgeNotice()}`);
-    }
-
-    if (priorMessages.length > 0) {
-        const transcript = priorMessages
-            .map((message) => {
-                const role = (message.role || 'unknown').toUpperCase();
-                const content = serializeContent(message.content);
-                return `${role}:\n${content}`;
-            })
-            .join('\n\n');
-
-        if (transcript) {
-            sections.push(`Conversation history:\n${transcript}`);
+        .models //= {}
+        | .models.providers //= {}
+        | .models.providers["claude-code-proxy"] = {
+            "baseUrl": ("http://localhost:" + $proxy_port),
+            "apiKey": "proxy-no-key-needed",
+            "api": "anthropic-messages",
+            "headers": {},
+            "models": proxy_models
         }
-    }
+        | .agents //= {}
+        | .agents.defaults //= {}
+        | .agents.defaults.models //= {}
+        | .agents.defaults.models["claude-code-proxy/claude-opus-4-5"] = { "alias": "opus" }
+        | .agents.defaults.models["claude-code-proxy/claude-sonnet-4-5"] = { "alias": "sonnet" }
+        ' "$OPENCLAW_CONFIG" > "$tmp_file"
 
-    sections.push(`Current user message:\n${serializeContent(lastUserMsg.content)}`);
-
-    const userContent = [
-        {
-            type: 'text',
-            text: sections.join('\n\n')
-        }
-    ];
-
-    const sdkInput = [];
-
-    sdkInput.push({
-        type: 'user',
-        message: {
-            role: 'user',
-            content: userContent
-        },
-        parent_tool_use_id: null
-    });
-
-    return {
-        sdkInput,
-        mode: 'bootstrap'
-    };
+    mv "$tmp_file" "$OPENCLAW_CONFIG"
+    echo "✅ Patched $OPENCLAW_CONFIG"
 }
 
-function buildAssistantMessage(msg, requestModel, fallbackResult) {
-    const usage = normalizeUsage(msg && msg.usage);
-    const text = msg ? extractText(msg.content) : fallbackResult;
+install_user_service() {
+    mkdir -p "$SYSTEMD_USER_DIR"
 
-    return {
-        id: (msg && msg.id) || `msg_proxy_${Date.now()}`,
-        type: 'message',
-        role: 'assistant',
-        model: (msg && msg.model) || requestModel || 'claude-code-proxy',
-        content: text ? [{ type: 'text', text }] : [],
-        stop_reason: (msg && msg.stop_reason) || 'end_turn',
-        stop_sequence: (msg && msg.stop_sequence) || null,
+    cat > "$SYSTEMD_SERVICE_PATH" <<EOF
+[Unit]
+Description=Claude Code Proxy for OpenClaw
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=${INSTALLED_SCRIPT} serve ${PORT}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+EOF
+
+    echo "✅ Installed user service at $SYSTEMD_SERVICE_PATH"
+}
+
+enable_user_service() {
+    systemctl --user daemon-reload
+    systemctl --user enable "$SYSTEMD_SERVICE_NAME" > /dev/null
+    systemctl --user restart "$SYSTEMD_SERVICE_NAME" 2> /dev/null || systemctl --user start "$SYSTEMD_SERVICE_NAME"
+    echo "✅ User service enabled and started"
+
+    if command -v loginctl > /dev/null 2>&1; then
+        if loginctl enable-linger "$USER" > /dev/null 2>&1; then
+            echo "✅ Enabled linger for $USER"
+        else
+            echo "ℹ️  Could not enable linger automatically."
+            echo "   If you need the proxy to start before login, run: sudo loginctl enable-linger $USER"
+        fi
+    fi
+}
+
+restart_gateway() {
+    if command -v openclaw > /dev/null 2>&1; then
+        echo "🔄 Restarting OpenClaw gateway..."
+        openclaw gateway restart || echo "⚠️  Could not restart automatically. Run: openclaw gateway restart"
+    else
+        echo "⚠️  openclaw command not found. Please restart the gateway manually."
+    fi
+}
+
+print_summary() {
+    echo ""
+    echo "============================================="
+    echo "✅ Deployment complete"
+    echo ""
+    echo "Installed provider: claude-code-proxy -> http://localhost:${PORT}"
+    echo "Proxy script: $INSTALLED_SCRIPT"
+    echo "User service: $SYSTEMD_SERVICE_PATH"
+    echo ""
+    echo "Suggested default model update:"
+    echo "  agents.defaults.model.primary = claude-code-proxy/claude-opus-4-5"
+    echo "  or"
+    echo "  agents.defaults.model.primary = claude-code-proxy/claude-sonnet-4-5"
+    echo ""
+    echo "Useful commands:"
+    echo "  systemctl --user status $SYSTEMD_SERVICE_NAME"
+    echo "  systemctl --user restart $SYSTEMD_SERVICE_NAME"
+    echo "  openclaw gateway restart"
+    echo ""
+}
+
+run_proxy() {
+    local proxy_js
+    proxy_js="$(resolve_proxy_js)"
+
+    require_command claude
+    require_command node
+    verify_claude
+
+    export PORT
+
+    echo "🚀 Starting Claude Code Proxy on port $PORT"
+    echo "   Requests will be forwarded through the real Claude Code CLI"
+    echo "   Press Ctrl+C to stop"
+    echo ""
+
+    exec node "$proxy_js"
+}
+
+install_proxy() {
+    echo "🔧 Claude Code Proxy Setup for OpenClaw"
+    echo "======================================="
+    echo ""
+    echo "This installs the proxy service on port ${PORT}, patches openclaw.json, and starts the user service."
+    echo ""
+
+    if [ ! -f "$OPENCLAW_CONFIG" ]; then
+        echo "❌ OpenClaw config not found at $OPENCLAW_CONFIG"
+        echo "   Run 'openclaw wizard' first on the target machine."
+        exit 1
+    fi
+
+    require_command jq
+    require_command node
+    require_command claude
+    require_command systemctl
+    verify_claude
+
+    backup_file "$OPENCLAW_CONFIG"
+    install_files
+    patch_openclaw_config
+    install_user_service
+    enable_user_service
+    restart_gateway
+    print_summary
+}
+
+case "$MODE" in
+    install)
+        install_proxy
+        ;;
+    serve)
+        run_proxy
+        ;;
+    -h|--help|help)
         usage
-    };
-}
-
-function extractSessionIdFromOutputMessage(message) {
-    if (!message || typeof message !== 'object') {
-        return null;
-    }
-
-    return typeof message.session_id === 'string' && message.session_id.trim()
-        ? message.session_id
-        : null;
-}
-
-function writeSseEvent(res, event, payload) {
-    res.write(`event: ${event}\n`);
-    res.write(`data: ${JSON.stringify(payload)}\n\n`);
-}
-
-function streamAnthropicMessage(res, assistantMessage) {
-    const text = extractText(assistantMessage.content);
-
-    writeSseEvent(res, 'message_start', {
-        type: 'message_start',
-        message: {
-            id: assistantMessage.id,
-            type: 'message',
-            role: 'assistant',
-            model: assistantMessage.model,
-            content: [],
-            stop_reason: null,
-            stop_sequence: null,
-            usage: {
-                input_tokens: assistantMessage.usage.input_tokens,
-                output_tokens: 0,
-                cache_creation_input_tokens: assistantMessage.usage.cache_creation_input_tokens,
-                cache_read_input_tokens: assistantMessage.usage.cache_read_input_tokens
-            }
-        }
-    });
-
-    if (text) {
-        writeSseEvent(res, 'content_block_start', {
-            type: 'content_block_start',
-            index: 0,
-            content_block: {
-                type: 'text',
-                text: ''
-            }
-        });
-
-        writeSseEvent(res, 'content_block_delta', {
-            type: 'content_block_delta',
-            index: 0,
-            delta: {
-                type: 'text_delta',
-                text
-            }
-        });
-
-        writeSseEvent(res, 'content_block_stop', {
-            type: 'content_block_stop',
-            index: 0
-        });
-    }
-
-    writeSseEvent(res, 'message_delta', {
-        type: 'message_delta',
-        delta: {
-            stop_reason: assistantMessage.stop_reason,
-            stop_sequence: assistantMessage.stop_sequence
-        },
-        usage: {
-            output_tokens: assistantMessage.usage.output_tokens
-        }
-    });
-
-    writeSseEvent(res, 'message_stop', {
-        type: 'message_stop'
-    });
-}
-
-function parseClaudeOutput(output, requestModel) {
-    const lines = output.split('\n').filter((line) => line.trim());
-    let finalAssistant = null;
-    let fallbackResult = null;
-    let sessionId = null;
-
-    for (const line of lines) {
-        try {
-            const msg = JSON.parse(line);
-            sessionId = extractSessionIdFromOutputMessage(msg) || sessionId;
-            if (msg.type === 'assistant' && msg.message) {
-                finalAssistant = msg.message;
-            }
-            if (msg.type === 'result' && msg.result) {
-                fallbackResult = msg;
-            }
-        } catch (e) {
-            // Skip non-JSON lines
-        }
-    }
-
-    if (finalAssistant) {
-        return {
-            assistantMessage: buildAssistantMessage(finalAssistant, requestModel),
-            sessionId
-        };
-    }
-
-    if (fallbackResult && fallbackResult.result) {
-        return {
-            assistantMessage: buildAssistantMessage(null, requestModel, fallbackResult.result),
-            sessionId
-        };
-    }
-
-    return null;
-}
-
-const server = http.createServer(async (req, res) => {
-    // Only handle POST to /v1/messages
-    if (req.method !== 'POST' || !req.url.startsWith('/v1/messages')) {
-        res.writeHead(404, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Not found' }));
-        return;
-    }
-
-    // Collect request body
-    let body = '';
-    for await (const chunk of req) {
-        body += chunk;
-    }
-
-    let request;
-    try {
-        request = JSON.parse(body);
-    } catch (e) {
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Invalid JSON' }));
-        return;
-    }
-
-    debugLog({
-        event: 'request_received',
-        path: req.url,
-        method: req.method,
-        model: request.model || null,
-        stream: request.stream === true,
-        messageCount: Array.isArray(request.messages) ? request.messages.length : 0,
-        sessionLookupKey: getSessionLookupKey(req, request),
-        systemPreview: extractSystemText(request.system).slice(0, 400)
-    });
-
-    // Check if streaming
-    const isStreaming = request.stream === true;
-    const effectiveModel = normalizeRequestedModel(request.model);
-    const sessionLookupKey = getSessionLookupKey(req, request);
-    sessionState = pruneExpiredSessions(sessionState).state;
-    const existingSession = sessionLookupKey ? sessionState.sessions[sessionLookupKey] : null;
-    const claudeSessionId = existingSession && existingSession.effectiveModel === effectiveModel
-        ? existingSession.claudeSessionId
-        : null;
-    
-    // Convert Anthropic API request to Claude Code SDK stream-json input
-    const inputBuild = buildSdkInput(request, { claudeSessionId });
-
-    if (inputBuild.error) {
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: inputBuild.error }));
-        return;
-    }
-
-    const { sdkInput, mode } = inputBuild;
-
-    console.log(`[${new Date().toISOString()}] Request: ${JSON.stringify(sdkInput[sdkInput.length - 1]).slice(0, 100)}...`);
-    debugLog({
-        event: 'request_translated',
-        model: request.model || null,
-        effectiveModel,
-        mode,
-        sessionLookupKey,
-        claudeSessionId,
-        translatedUserPreview: JSON.stringify(sdkInput[sdkInput.length - 1]).slice(0, 800)
-    });
-
-    // Spawn Claude Code CLI
-    const claudeArgs = [
-        '--print',
-        '--input-format=stream-json',
-        '--output-format=stream-json',
-        '--model', effectiveModel,
-        '--tools', CLAUDE_ALLOWED_TOOLS.join(','),
-        '--disallowedTools', ...CLAUDE_DISALLOWED_TOOLS,
-        '--verbose'
-    ];
-
-    const claude = spawn('claude', claudeArgs, {
-        stdio: ['pipe', 'pipe', 'pipe']
-    });
-
-    // Send the translated input stream
-    for (const message of sdkInput) {
-        claude.stdin.write(JSON.stringify(message) + '\n');
-    }
-    claude.stdin.end();
-
-    if (isStreaming) {
-        // Streaming response
-        res.writeHead(200, {
-            'Content-Type': 'text/event-stream',
-            'Cache-Control': 'no-cache',
-            'Connection': 'keep-alive'
-        });
-
-        let output = '';
-
-        claude.stdout.on('data', (data) => {
-            output += data.toString();
-        });
-
-        claude.on('close', () => {
-            const parsedOutput = parseClaudeOutput(output, request.model);
-            if (parsedOutput) {
-                const { assistantMessage, sessionId } = parsedOutput;
-                    const nextSessionLookupKey = buildNextSessionLookupKey(request, assistantMessage);
-                    saveSessionMapping(sessionLookupKey, nextSessionLookupKey, sessionId, effectiveModel);
-                debugLog({
-                    event: 'stream_success',
-                    model: request.model || null,
-                    effectiveModel,
-                    sessionLookupKey,
-                        nextSessionLookupKey,
-                    claudeSessionId: sessionId || claudeSessionId,
-                    responsePreview: extractText(assistantMessage.content).slice(0, 400)
-                });
-                streamAnthropicMessage(res, assistantMessage);
-            } else if (!res.headersSent) {
-                debugLog({
-                    event: 'stream_no_response',
-                    model: request.model || null,
-                    effectiveModel,
-                    sessionLookupKey,
-                    claudeSessionId,
-                    rawOutputPreview: output.slice(0, 1200)
-                });
-                res.writeHead(500, { 'Content-Type': 'application/json' });
-                res.write(JSON.stringify({ error: 'No response from Claude Code' }));
-            }
-            res.end();
-        });
-    } else {
-        // Non-streaming response
-        let output = '';
-        claude.stdout.on('data', (data) => {
-            output += data.toString();
-        });
-
-        claude.on('close', () => {
-            const parsedOutput = parseClaudeOutput(output, request.model);
-            if (parsedOutput) {
-                const { assistantMessage, sessionId } = parsedOutput;
-                    const nextSessionLookupKey = buildNextSessionLookupKey(request, assistantMessage);
-                    saveSessionMapping(sessionLookupKey, nextSessionLookupKey, sessionId, effectiveModel);
-                debugLog({
-                    event: 'non_stream_success',
-                    model: request.model || null,
-                    effectiveModel,
-                    sessionLookupKey,
-                        nextSessionLookupKey,
-                    claudeSessionId: sessionId || claudeSessionId,
-                    responsePreview: extractText(assistantMessage.content).slice(0, 400)
-                });
-                res.writeHead(200, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify(assistantMessage));
-                return;
-            }
-
-            debugLog({
-                event: 'non_stream_no_response',
-                model: request.model || null,
-                effectiveModel,
-                sessionLookupKey,
-                claudeSessionId,
-                rawOutputPreview: output.slice(0, 1200)
-            });
-
-            res.writeHead(500, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'No response from Claude Code' }));
-        });
-    }
-
-    claude.stderr.on('data', (data) => {
-        console.error(`[stderr] ${data.toString()}`);
-        debugLog({
-            event: 'claude_stderr',
-            model: request.model || null,
-            effectiveModel,
-            sessionLookupKey,
-            claudeSessionId,
-            stderrPreview: data.toString().slice(0, 800)
-        });
-    });
-
-    claude.on('error', (err) => {
-        console.error(`[error] ${err.message}`);
-        debugLog({
-            event: 'claude_process_error',
-            model: request.model || null,
-            effectiveModel,
-            sessionLookupKey,
-            claudeSessionId,
-            error: err.message
-        });
-        if (!res.headersSent) {
-            res.writeHead(500, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: err.message }));
-        }
-    });
-});
-
-server.listen(PORT, () => {
-    console.log(`Claude Code Proxy listening on http://localhost:${PORT}`);
-    console.log(`Configure OpenClaw with baseUrl: http://localhost:${PORT}`);
-});
-PROXY_SERVER
+        ;;
+    *)
+        echo "❌ Unknown mode: $MODE"
+        echo ""
+        usage
+        exit 1
+        ;;
+esac
