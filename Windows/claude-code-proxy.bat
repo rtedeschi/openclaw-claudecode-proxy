@@ -153,6 +153,11 @@ if errorlevel 1 (
 echo Installed scheduled task %TASK_NAME%
 exit /b 0
 
+:stop_existing_task
+schtasks /End /TN "%TASK_NAME%" >nul 2>nul
+echo Stopped existing task %TASK_NAME%
+exit /b 0
+
 :start_task
 schtasks /Run /TN "%TASK_NAME%" >nul
 if errorlevel 1 (
@@ -231,6 +236,7 @@ call :verify_claude || exit /b 1
 call :backup_openclaw_config || exit /b 1
 call :install_files || exit /b 1
 call :patch_openclaw_config || exit /b 1
+call :stop_existing_task
 call :install_startup_task || exit /b 1
 call :start_task
 call :restart_gateway

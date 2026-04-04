@@ -199,10 +199,17 @@ EOF
     echo "✅ Installed user service at $SYSTEMD_SERVICE_PATH"
 }
 
+stop_existing_user_service() {
+    if systemctl --user list-unit-files "$SYSTEMD_SERVICE_NAME" > /dev/null 2>&1; then
+        systemctl --user stop "$SYSTEMD_SERVICE_NAME" 2> /dev/null || true
+        echo "✅ Stopped existing user service"
+    fi
+}
+
 enable_user_service() {
     systemctl --user daemon-reload
     systemctl --user enable "$SYSTEMD_SERVICE_NAME" > /dev/null
-    systemctl --user restart "$SYSTEMD_SERVICE_NAME" 2> /dev/null || systemctl --user start "$SYSTEMD_SERVICE_NAME"
+    systemctl --user start "$SYSTEMD_SERVICE_NAME"
     echo "✅ User service enabled and started"
 
     if command -v loginctl > /dev/null 2>&1; then
@@ -285,6 +292,7 @@ install_proxy() {
     backup_file "$OPENCLAW_CONFIG"
     install_files
     patch_openclaw_config
+    stop_existing_user_service
     install_user_service
     enable_user_service
     restart_gateway
