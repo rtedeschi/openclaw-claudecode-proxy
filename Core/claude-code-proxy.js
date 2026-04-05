@@ -5,6 +5,10 @@ const crypto = require('crypto');
 const os = require('os');
 const path = require('path');
 
+const USER_HOME = os.homedir();
+const OPENCLAW_HOME = path.join(USER_HOME, '.openclaw');
+const OPENCLAW_WORKSPACE = path.join(OPENCLAW_HOME, 'workspace');
+const DEFAULT_WORKING_DIRECTORY = fs.existsSync(OPENCLAW_WORKSPACE) ? OPENCLAW_WORKSPACE : USER_HOME;
 const PORT = process.env.PORT || 8787;
 const TEMP_DIR = os.tmpdir();
 const DEBUG_LOG = path.join(TEMP_DIR, 'claude-code-proxy-debug.log');
@@ -20,6 +24,12 @@ const CLAUDE_DISALLOWED_TOOLS = [
     'mcp__claude_ai_Gmail__authenticate',
     'mcp__claude_ai_Google_Calendar__authenticate'
 ];
+
+try {
+    process.chdir(DEFAULT_WORKING_DIRECTORY);
+} catch (error) {
+    // If this fails, keep the inherited cwd and continue.
+}
 
 function isExpiredSession(entry, now = Date.now()) {
     if (!entry || typeof entry !== 'object') {
@@ -188,7 +198,7 @@ function buildToolBridgeNotice() {
 }
 
 function getMemoryBootstrapContext() {
-    const workspaceRoot = path.join(os.homedir(), '.openclaw', 'workspace');
+    const workspaceRoot = OPENCLAW_WORKSPACE;
     const memoryFile = path.join(workspaceRoot, 'MEMORY.md');
     const memoryDir = path.join(workspaceRoot, 'memory');
     const memoryFiles = [];
@@ -767,7 +777,8 @@ const server = http.createServer(async (req, res) => {
     ];
 
     const claude = spawn('claude', claudeArgs, {
-        stdio: ['pipe', 'pipe', 'pipe']
+        stdio: ['pipe', 'pipe', 'pipe'],
+        cwd: DEFAULT_WORKING_DIRECTORY
     });
 
     for (const message of sdkInput) {

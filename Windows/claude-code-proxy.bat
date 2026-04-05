@@ -6,10 +6,12 @@ if "%SCRIPT_DIR:~-1%"=="\" set "SCRIPT_DIR=%SCRIPT_DIR:~0,-1%"
 
 set "OPENCLAW_HOME=%USERPROFILE%\.openclaw"
 set "OPENCLAW_CONFIG=%OPENCLAW_HOME%\openclaw.json"
+set "OPENCLAW_WORKSPACE=%OPENCLAW_HOME%\workspace"
 set "INSTALL_DIR=%OPENCLAW_HOME%\workspace\scripts"
 set "INSTALL_CORE_DIR=%INSTALL_DIR%\Core"
 set "INSTALLED_SCRIPT=%INSTALL_DIR%\claude-code-proxy.bat"
 set "INSTALLED_PROXY_JS=%INSTALL_CORE_DIR%\claude-code-proxy.js"
+set "INSTALLED_TASK_SCRIPT=%INSTALL_DIR%\claude-code-proxy-task.bat"
 set "TASK_NAME=ClaudeCodeProxy"
 
 if defined PROXY_PORT (
@@ -115,8 +117,21 @@ if errorlevel 1 (
     call :pause_if_requested
     exit /b 1
 )
+(
+    echo @echo off
+    echo setlocal EnableExtensions
+    echo if not exist "%OPENCLAW_WORKSPACE%" mkdir "%OPENCLAW_WORKSPACE%" ^>nul 2^>nul
+    echo cd /d "%OPENCLAW_WORKSPACE%"
+    echo call "%INSTALLED_SCRIPT%" serve %PORT%
+) > "%INSTALLED_TASK_SCRIPT%"
+if errorlevel 1 (
+    echo Failed to install task launcher at %INSTALLED_TASK_SCRIPT%
+    call :pause_if_requested
+    exit /b 1
+)
 echo Installed script at %INSTALLED_SCRIPT%
 echo Installed proxy JS at %INSTALLED_PROXY_JS%
+echo Installed task launcher at %INSTALLED_TASK_SCRIPT%
 exit /b 0
 
 :patch_openclaw_config
@@ -144,7 +159,7 @@ echo Patched %OPENCLAW_CONFIG%
 exit /b 0
 
 :install_startup_task
-schtasks /Create /F /TN "%TASK_NAME%" /SC ONLOGON /TR "\"%INSTALLED_SCRIPT%\" serve %PORT%" >nul
+schtasks /Create /F /TN "%TASK_NAME%" /SC ONLOGON /TR "\"%INSTALLED_TASK_SCRIPT%\"" >nul
 if errorlevel 1 (
     echo Failed to register scheduled task %TASK_NAME%
     call :pause_if_requested
@@ -208,6 +223,8 @@ call :resolve_proxy_js || exit /b 1
 call :require_command claude || exit /b 1
 call :require_command node || exit /b 1
 call :verify_claude || exit /b 1
+if not exist "%OPENCLAW_WORKSPACE%" mkdir "%OPENCLAW_WORKSPACE%" >nul 2>nul
+cd /d "%OPENCLAW_WORKSPACE%"
 set "PORT=%PORT%"
 echo Starting Claude Code Proxy on port %PORT%
 echo Requests will be forwarded through the real Claude Code CLI

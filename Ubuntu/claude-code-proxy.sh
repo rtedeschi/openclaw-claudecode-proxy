@@ -8,6 +8,7 @@ CURRENT_SCRIPT="${SCRIPT_DIR}/$(basename "$0")"
 export PATH="${HOME}/.local/bin:${HOME}/.npm-global/bin:${HOME}/.bun/bin:${HOME}/bin:${PATH}"
 OPENCLAW_HOME="${HOME}/.openclaw"
 OPENCLAW_CONFIG="${OPENCLAW_HOME}/openclaw.json"
+OPENCLAW_WORKSPACE="${OPENCLAW_HOME}/workspace"
 INSTALL_DIR="${OPENCLAW_HOME}/workspace/scripts"
 INSTALL_CORE_DIR="${INSTALL_DIR}/Core"
 INSTALLED_SCRIPT="${INSTALL_DIR}/claude-code-proxy.sh"
@@ -188,6 +189,7 @@ After=default.target
 
 [Service]
 Type=simple
+WorkingDirectory=${OPENCLAW_WORKSPACE}
 ExecStart=${INSTALLED_SCRIPT} serve ${PORT}
 Restart=always
 RestartSec=5
@@ -259,6 +261,9 @@ run_proxy() {
     require_command claude
     require_command node
     verify_claude
+
+    mkdir -p "$OPENCLAW_WORKSPACE"
+    cd "$OPENCLAW_WORKSPACE"
 
     export PORT
 
