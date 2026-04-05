@@ -10,6 +10,11 @@ const TEMP_DIR = os.tmpdir();
 const DEBUG_LOG = path.join(TEMP_DIR, 'claude-code-proxy-debug.log');
 const SESSION_STATE_PATH = path.join(TEMP_DIR, 'claude-code-proxy-state.json');
 const SESSION_TTL_MS = 6 * 60 * 60 * 1000;
+const MAX_CONTEXT_MESSAGES = 8;
+const MAX_CONTEXT_CHARS_PER_MESSAGE = 1200;
+const MAX_MEMORY_EXCERPT_CHARS = 2200;
+const MAX_DAILY_EXCERPT_CHARS = 2200;
+const MAX_RECENT_MEMORY_FILES = 3;
 const CLAUDE_ALLOWED_TOOLS = ['Read', 'Edit', 'Write', 'Bash', 'Grep', 'Glob', 'TodoWrite'];
 const CLAUDE_DISALLOWED_TOOLS = [
     'mcp__claude_ai_Gmail__authenticate',
@@ -182,6 +187,161 @@ function buildToolBridgeNotice() {
     ].join('\n');
 }
 
+function getMemoryBootstrapContext() {
+    const workspaceRoot = path.join(os.homedir(), '.openclaw', 'workspace');
+    const memoryFile = path.join(workspaceRoot, 'MEMORY.md');
+    const memoryDir = path.join(workspaceRoot, 'memory');
+    const memoryFiles = [];
+
+    try {
+        const entries = fs.readdirSync(memoryDir, { withFileTypes: true });
+        for (const entry of entries) {
+            if (!entry.isFile() || !entry.name.endsWith('.md')) {
+                continue;
+            }
+
+            memoryFiles.push(path.join(memoryDir, entry.name));
+        }
+    } catch (error) {
+        // Ignore missing directory or read errors; the notice will reflect the file inventory we could observe.
+    }
+
+    memoryFiles.sort();
+
+    const todaysMemoryFile = path.join(memoryDir, `${new Date().toISOString().slice(0, 10)}.md`);
+    const recentMemoryFiles = memoryFiles.slice(-5).reverse();
+
+    return {
+        workspaceRoot,
+        memoryFile,
+        memoryDir,
+        memoryFiles,
+        recentMemoryFiles,
+        todaysMemoryFile,
+        hasLongTermMemory: fs.existsSync(memoryFile),
+        hasTodayMemory: fs.existsSync(todaysMemoryFile)
+    };
+}
+
+function buildMemoryBootstrapNotice() {
+    const context = getMemoryBootstrapContext();
+    const recentFilesSection = context.recentMemoryFiles.length > 0
+        ? context.recentMemoryFiles.map((filePath) => `- ${filePath}`).join('\n')
+        : '- No markdown files were detected in the memory directory at proxy translation time.';
+
+    return [
+        'Required startup memory loading:',
+        `- Workspace root: ${context.workspaceRoot}`,
+        `- Read baseline long-term memory from: ${context.memoryFile}`,
+        `- Long-term memory present right now: ${context.hasLongTermMemory ? 'yes' : 'no'}`,
+        `- Daily memory directory: ${context.memoryDir}`,
+        `- Daily memory markdown files present right now: ${context.memoryFiles.length}`,
+        `- Today's daily memory file path: ${context.todaysMemoryFile}`,
+        `- Today's daily memory file present right now: ${context.hasTodayMemory ? 'yes' : 'no'}`,
+        '- Most recent daily memory files observed on disk:',
+        recentFilesSection,
+        '- Do not claim that no daily memory files exist unless this inventory is empty and the listed paths cannot be read.',
+        '- If the user asks about ongoing work, prior commitments, or daily context, consult those memory files before answering.',
+        '- Treat these files as OpenClaw-owned context that should be loaded on startup/reset boundaries.'
+    ].join('\n');
+}
+
+function buildMemoryAnsweringNotice() {
+    return [
+        'Memory-answering rules:',
+        '- Answer the current user message directly after consulting memory.',
+        '- Do not repeat the previous assistant memory summary unless the user explicitly asks for a recap, restatement, or comparison.',
+        '- If the user is testing continuity, provide one or two specific facts that demonstrate recall, then stop.',
+        '- Prefer incremental answers over re-dumping long-term memory.'
+    ].join('\n');
+}
+
+function buildResponseFocusNotice() {
+    return [
+        'Response rules:',
+        '- Use the memory digest and recent conversation context as background, not as the answer itself.',
+        '- Answer the current user message directly and specifically.',
+        '- Do not restate large memory sections unless the user explicitly asks for a recap or summary.',
+        '- If you cite memory, mention only the facts needed to answer the current turn.'
+    ].join('\n');
+}
+
+function truncateText(text, maxChars) {
+    if (typeof text !== 'string') {
+        return '';
+    }
+
+    if (text.length <= maxChars) {
+        return text;
+    }
+
+    return `${text.slice(0, Math.max(0, maxChars - 16))}\n...[truncated]`;
+}
+
+function readExcerpt(filePath, maxChars) {
+    try {
+        return truncateText(fs.readFileSync(filePath, 'utf8').trim(), maxChars);
+    } catch (error) {
+        return '';
+    }
+}
+
+function buildMemoryDigest() {
+    const context = getMemoryBootstrapContext();
+    const digestSections = [];
+    const longTermExcerpt = context.hasLongTermMemory
+        ? readExcerpt(context.memoryFile, MAX_MEMORY_EXCERPT_CHARS)
+        : '';
+    const todaysExcerpt = context.hasTodayMemory
+        ? readExcerpt(context.todaysMemoryFile, MAX_DAILY_EXCERPT_CHARS)
+        : '';
+    const recentDailyFiles = context.memoryFiles
+        .filter((filePath) => filePath !== context.todaysMemoryFile)
+        .slice(-MAX_RECENT_MEMORY_FILES)
+        .reverse();
+
+    digestSections.push('Memory digest inventory:');
+    digestSections.push(`- Long-term memory file: ${context.memoryFile} (${context.hasLongTermMemory ? 'present' : 'missing'})`);
+    digestSections.push(`- Today's daily file: ${context.todaysMemoryFile} (${context.hasTodayMemory ? 'present' : 'missing'})`);
+    digestSections.push(`- Daily markdown file count: ${context.memoryFiles.length}`);
+
+    if (recentDailyFiles.length > 0) {
+        digestSections.push('Recent daily files:');
+        digestSections.push(recentDailyFiles.map((filePath) => `- ${filePath}`).join('\n'));
+    }
+
+    if (longTermExcerpt) {
+        digestSections.push(`Long-term memory excerpt (${context.memoryFile}):\n${longTermExcerpt}`);
+    }
+
+    if (todaysExcerpt) {
+        digestSections.push(`Today's daily memory excerpt (${context.todaysMemoryFile}):\n${todaysExcerpt}`);
+    }
+
+    return digestSections.join('\n\n');
+}
+
+function buildConversationContext(messages, lastUserIndex) {
+    const priorMessages = messages.slice(0, lastUserIndex);
+    const windowedMessages = priorMessages.slice(-MAX_CONTEXT_MESSAGES);
+
+    if (windowedMessages.length === 0) {
+        return '';
+    }
+
+    return windowedMessages
+        .map((message) => {
+            const role = (message.role || 'unknown').toUpperCase();
+            const content = truncateText(serializeContent(message.content), MAX_CONTEXT_CHARS_PER_MESSAGE);
+            return `${role}:\n${content}`;
+        })
+        .join('\n\n');
+}
+
+function includesAnyMarker(text, markers) {
+    return markers.some((marker) => text.includes(marker));
+}
+
 function getHeaderValue(headers, name) {
     const value = headers[name];
     if (Array.isArray(value)) {
@@ -327,7 +487,7 @@ function normalizeRequestedModel(model) {
     return modelMap[normalized] || normalized;
 }
 
-function shouldForceBootstrapForTurn(message) {
+function isStartupTurn(message) {
     const contentText = serializeContent(message && message.content);
     if (!contentText) {
         return false;
@@ -342,10 +502,10 @@ function shouldForceBootstrapForTurn(message) {
         'session startup sequence'
     ];
 
-    return startupMarkers.some((marker) => normalizedText.includes(marker));
+    return includesAnyMarker(normalizedText, startupMarkers);
 }
 
-function buildSdkInput(request, options) {
+function buildSdkInput(request) {
     const messages = Array.isArray(request.messages) ? request.messages : [];
     const lastUserIndex = [...messages]
         .map((message, index) => ({ message, index }))
@@ -358,24 +518,8 @@ function buildSdkInput(request, options) {
     }
 
     const lastUserMsg = messages[lastUserIndex];
-    const priorMessages = messages.slice(0, lastUserIndex);
     const systemText = extractSystemText(request.system);
-    const resumedClaudeSessionId = options && options.claudeSessionId ? options.claudeSessionId : null;
-    const forceBootstrap = shouldForceBootstrapForTurn(lastUserMsg);
-
-    if (resumedClaudeSessionId && !forceBootstrap) {
-        return {
-            sdkInput: [
-                {
-                    type: 'user',
-                    message: normalizeUserMessage(lastUserMsg),
-                    parent_tool_use_id: null,
-                    session_id: resumedClaudeSessionId
-                }
-            ],
-            mode: 'resume'
-        };
-    }
+    const startupTurn = isStartupTurn(lastUserMsg);
 
     const sections = [];
 
@@ -385,18 +529,18 @@ function buildSdkInput(request, options) {
         sections.push(`System instructions:\n${buildToolBridgeNotice()}`);
     }
 
-    if (priorMessages.length > 0) {
-        const transcript = priorMessages
-            .map((message) => {
-                const role = (message.role || 'unknown').toUpperCase();
-                const content = serializeContent(message.content);
-                return `${role}:\n${content}`;
-            })
-            .join('\n\n');
+    sections.push(buildResponseFocusNotice());
+    sections.push(buildMemoryAnsweringNotice());
+    sections.push(buildMemoryBootstrapNotice());
+    sections.push(buildMemoryDigest());
 
-        if (transcript) {
-            sections.push(`Conversation history:\n${transcript}`);
-        }
+    if (startupTurn) {
+        sections.push('Startup turn rules:\n- Execute the startup sequence using the memory digest and recent conversation context before replying.\n- Keep the greeting concise.');
+    }
+
+    const transcript = buildConversationContext(messages, lastUserIndex);
+    if (transcript) {
+        sections.push(`Recent conversation context:\n${transcript}`);
     }
 
     sections.push(`Current user message:\n${serializeContent(lastUserMsg.content)}`);
@@ -421,7 +565,7 @@ function buildSdkInput(request, options) {
 
     return {
         sdkInput,
-        mode: forceBootstrap ? 'bootstrap-reset' : 'bootstrap'
+        mode: startupTurn ? 'stateless-startup' : 'stateless'
     };
 }
 
@@ -592,13 +736,7 @@ const server = http.createServer(async (req, res) => {
     const isStreaming = request.stream === true;
     const effectiveModel = normalizeRequestedModel(request.model);
     const sessionLookupKey = getSessionLookupKey(req, request);
-    sessionState = pruneExpiredSessions(sessionState).state;
-    const existingSession = sessionLookupKey ? sessionState.sessions[sessionLookupKey] : null;
-    const claudeSessionId = existingSession && existingSession.effectiveModel === effectiveModel
-        ? existingSession.claudeSessionId
-        : null;
-
-    const inputBuild = buildSdkInput(request, { claudeSessionId });
+    const inputBuild = buildSdkInput(request);
 
     if (inputBuild.error) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -615,7 +753,6 @@ const server = http.createServer(async (req, res) => {
         effectiveModel,
         mode,
         sessionLookupKey,
-        claudeSessionId,
         translatedUserPreview: JSON.stringify(sdkInput[sdkInput.length - 1]).slice(0, 800)
     });
 
@@ -654,16 +791,12 @@ const server = http.createServer(async (req, res) => {
         claude.on('close', () => {
             const parsedOutput = parseClaudeOutput(output, request.model);
             if (parsedOutput) {
-                const { assistantMessage, sessionId } = parsedOutput;
-                const nextSessionLookupKey = buildNextSessionLookupKey(request, assistantMessage);
-                saveSessionMapping(sessionLookupKey, nextSessionLookupKey, sessionId, effectiveModel);
+                const { assistantMessage } = parsedOutput;
                 debugLog({
                     event: 'stream_success',
                     model: request.model || null,
                     effectiveModel,
                     sessionLookupKey,
-                    nextSessionLookupKey,
-                    claudeSessionId: sessionId || claudeSessionId,
                     responsePreview: extractText(assistantMessage.content).slice(0, 400)
                 });
                 streamAnthropicMessage(res, assistantMessage);
@@ -673,7 +806,6 @@ const server = http.createServer(async (req, res) => {
                     model: request.model || null,
                     effectiveModel,
                     sessionLookupKey,
-                    claudeSessionId,
                     rawOutputPreview: output.slice(0, 1200)
                 });
                 res.writeHead(500, { 'Content-Type': 'application/json' });
@@ -691,16 +823,12 @@ const server = http.createServer(async (req, res) => {
         claude.on('close', () => {
             const parsedOutput = parseClaudeOutput(output, request.model);
             if (parsedOutput) {
-                const { assistantMessage, sessionId } = parsedOutput;
-                const nextSessionLookupKey = buildNextSessionLookupKey(request, assistantMessage);
-                saveSessionMapping(sessionLookupKey, nextSessionLookupKey, sessionId, effectiveModel);
+                const { assistantMessage } = parsedOutput;
                 debugLog({
                     event: 'non_stream_success',
                     model: request.model || null,
                     effectiveModel,
                     sessionLookupKey,
-                    nextSessionLookupKey,
-                    claudeSessionId: sessionId || claudeSessionId,
                     responsePreview: extractText(assistantMessage.content).slice(0, 400)
                 });
                 res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -713,7 +841,6 @@ const server = http.createServer(async (req, res) => {
                 model: request.model || null,
                 effectiveModel,
                 sessionLookupKey,
-                claudeSessionId,
                 rawOutputPreview: output.slice(0, 1200)
             });
 
@@ -729,7 +856,6 @@ const server = http.createServer(async (req, res) => {
             model: request.model || null,
             effectiveModel,
             sessionLookupKey,
-            claudeSessionId,
             stderrPreview: data.toString().slice(0, 800)
         });
     });
@@ -741,7 +867,6 @@ const server = http.createServer(async (req, res) => {
             model: request.model || null,
             effectiveModel,
             sessionLookupKey,
-            claudeSessionId,
             error: error.message
         });
         if (!res.headersSent) {

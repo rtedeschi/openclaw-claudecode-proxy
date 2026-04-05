@@ -4,6 +4,324 @@
 
 This project bridges OpenClaw to Claude Code CLI through a local Anthropic Messages-compatible proxy.
 
+The proxy is not just a transport shim. It is the boundary that makes OpenClaw's context model usable through Claude Code CLI without depending on Claude session continuity to preserve memory and task state.
+
+The current design is intentionally stateless per turn.
+
+That is the key architectural decision.
+
+## Design Goal
+
+The system should satisfy these constraints:
+
+1. OpenClaw remains authoritative for conversation history, startup semantics, memory conventions, and tool policy.
+2. Claude Code CLI remains the execution/runtime engine that actually talks to Anthropic and runs tools.
+3. The proxy should compose each turn deterministically from OpenClaw-owned context instead of relying on Claude-side resumed session state.
+
+## Current Components
+
+### OpenClaw
+
+OpenClaw is the conversation owner.
+
+It is responsible for:
+
+- user and channel interaction
+- agent orchestration
+- memory file conventions
+- startup and reset semantics
+- provider selection
+- conversation history
+
+### Proxy
+
+The proxy is the compatibility and context-composition boundary.
+
+It is responsible for:
+
+- accepting Anthropic Messages-style requests from OpenClaw
+- normalizing those requests for Claude Code CLI
+- composing a deterministic per-turn prompt package
+- injecting memory inventory and memory excerpts
+- limiting tool exposure to the bridge allowlist
+- keeping the request shape stable across platforms
+
+### Claude Code CLI
+
+Claude Code CLI is the Claude runtime.
+
+It is responsible for:
+
+- upstream request execution
+- Claude-side tool invocation
+- model runtime behavior
+- any provider-side prompt caching Anthropic decides to apply
+
+Claude Code CLI is no longer treated as the source of truth for continuity.
+
+## Why The Architecture Changed
+
+The earlier design used a hybrid model:
+
+- bootstrap when no reusable Claude session was available
+- resume with Claude `session_id` for ordinary turns
+
+That design failed in practice for this integration.
+
+Observed failure modes:
+
+1. A startup or memory-loading turn could work once, then the next resumed turn would behave as if memory had vanished.
+2. Memory-oriented turns could overcorrect and dump large memory summaries repeatedly instead of answering the current question.
+3. Startup/reset semantics from OpenClaw could drift out of alignment with Claude's internal session continuity.
+4. Subtle wording changes in the user prompt changed whether the proxy chose bootstrap or resume.
+
+The result was a system that was efficient when it worked and unreliable when it mattered.
+
+That tradeoff was not acceptable.
+
+## Current Request Model
+
+### Stateless Per-Turn Composition
+
+Every OpenClaw turn now becomes a fresh Claude Code request.
+
+The proxy does not rely on a prior Claude `session_id` to preserve continuity for ordinary conversation.
+
+Each translated request includes:
+
+1. system instructions from OpenClaw
+2. proxy tool-bridge rules
+3. response-shaping rules to reduce context dumping
+4. a host-verified memory inventory
+5. a deterministic memory digest
+6. a bounded recent-conversation window
+7. the current user message
+
+The live request modes are now:
+
+- `stateless`
+- `stateless-startup`
+
+These modes differ only in whether startup-specific instructions are added.
+
+### Memory Inventory
+
+The proxy inspects the filesystem directly and injects facts such as:
+
+- whether `~/.openclaw/workspace/MEMORY.md` exists
+- whether today's daily note exists
+- how many markdown memory files exist
+- the most recent observed daily memory files
+
+This removes ambiguity where the model might otherwise claim no daily files exist when they are present on disk.
+
+### Memory Digest
+
+The proxy builds a deterministic digest from OpenClaw-owned memory files.
+
+Current sources:
+
+- `~/.openclaw/workspace/MEMORY.md`
+- today's daily note if present
+- a short list of recent daily note paths
+
+The proxy includes excerpts rather than asking Claude to discover everything through tool calls on each turn.
+
+This trades some token cost for deterministic continuity.
+
+### Recent Conversation Window
+
+The proxy includes only a bounded slice of recent conversation rather than the full historical transcript.
+
+Current implementation:
+
+- last 8 prior messages
+- each message truncated to a maximum character budget
+
+This is a deliberate compromise:
+
+- enough local context for conversational continuity
+- not enough accumulated transcript weight to dominate the current user question
+
+## Core Principle
+
+OpenClaw owns context policy.
+
+The proxy owns context packaging.
+
+Claude Code CLI executes the packaged request.
+
+That means continuity should come from deterministic reconstruction, not from hoping Claude retained the right state from an earlier turn.
+
+## Current Behavioral Rules
+
+### Rule 1: Every turn is reconstructible
+
+The proxy must be able to reconstruct enough context for the current turn without relying on prior Claude session state.
+
+### Rule 2: Memory is background, not the answer
+
+The request explicitly tells Claude to use memory digest and recent context as background information.
+
+It should answer the current user message directly, not restate the digest unless asked.
+
+### Rule 3: Startup is explicit but not fundamentally different
+
+Startup and reset turns still matter, but they now travel through the same stateless composition path.
+
+The only difference is an added startup instruction block telling Claude to perform startup behavior using the supplied digest and recent context.
+
+### Rule 4: Conversation context must be bounded
+
+Full history replay on every turn is not the design target.
+
+The proxy should provide only enough recent context to support the current response.
+
+### Rule 5: Filesystem truth beats model inference
+
+If the host can verify a memory file exists, the prompt should state that fact directly.
+
+The model should not have to infer filesystem reality from weak hints.
+
+## Responsibility Split
+
+### OpenClaw owns
+
+- startup and reset semantics
+- high-level conversation history
+- workspace and memory conventions
+- persona and behavioral policy
+- provider routing
+
+### Proxy owns
+
+- request normalization
+- stateless prompt composition
+- memory inventory generation
+- memory digest generation
+- recent-context windowing
+- tool bridge restrictions
+- debug logging of the translated request mode
+
+### Claude Code CLI owns
+
+- Claude execution
+- tool running within the allowed bridge
+- upstream Anthropic request behavior
+- any incidental provider-side caching
+
+## Prompt Assembly Shape
+
+Conceptually, each translated turn is assembled like this:
+
+1. `System instructions`
+2. `Proxy tool rules`
+3. `Response rules`
+4. `Memory-answering rules`
+5. `Memory inventory`
+6. `Memory digest`
+7. `Recent conversation context`
+8. `Current user message`
+
+This shape is deterministic and does not depend on Claude-side hidden state.
+
+## Caching Expectations
+
+Anthropic or Claude Code may still apply prompt caching to repeated prefixes.
+
+However, the architecture does not depend on that behavior.
+
+Required mental model:
+
+- caching is an optimization bonus
+- deterministic context reconstruction is the actual continuity mechanism
+
+## Known Tradeoffs
+
+### Advantages
+
+- continuity no longer depends on Claude resume behavior
+- startup and reset are easier to reason about
+- filesystem-backed memory loading is deterministic
+- debugging is simpler because each turn's context is explicit in the translated request
+
+### Costs
+
+- higher token usage than pure resume
+- some duplicated context across turns
+- memory digests may need tuning to avoid over-answering or over-reciting
+
+These costs are accepted because correctness is more important than absolute token minimization for this bridge.
+
+## Current Failure Modes To Watch
+
+Even with stateless composition, these risks remain:
+
+1. The memory digest may still be too large or too dominant, causing recap-heavy answers.
+2. The recent conversation window may include prior assistant memory dumps that bias the next answer.
+3. Daily memory selection may need refinement if today's file is absent but a nearby recent file is more relevant.
+4. The digest may eventually need structured extraction instead of raw excerpt inclusion.
+
+These are prompt-composition problems, not continuity-loss problems.
+
+That is progress, because they are deterministic and inspectable.
+
+## Implementation Status
+
+### Completed
+
+- [x] Proxy no longer relies on Claude resume for normal continuation turns.
+- [x] Startup/reset detection still exists, but now selects a stateless startup-flavored request shape.
+- [x] Proxy injects a host-verified memory inventory.
+- [x] Proxy injects a deterministic memory digest from long-term memory and today's daily note.
+- [x] Proxy uses a bounded recent-conversation window.
+- [x] Proxy includes explicit response-shaping rules to reduce context dumping.
+- [x] Runtime copy and repo copy have been kept in sync.
+
+### Outstanding Tuning Work
+
+- [ ] Filter prior assistant memory dumps out of the recent-conversation window when they would bias the next answer.
+- [ ] Replace raw file excerpts with a more compact structured memory digest if responses still over-recite context.
+- [ ] Revisit excerpt size limits if token cost becomes too high.
+- [ ] Update README if operator-facing documentation should describe the stateless mode explicitly.
+
+## Success Criteria
+
+The architecture is working correctly when all of the following are true:
+
+1. A fresh turn can answer correctly without depending on hidden Claude session state.
+2. Startup/reset behavior is reliable and does not create a false fresh-slate response.
+3. The model can reference long-term and daily memory consistently.
+4. The model answers the current question instead of re-dumping context by default.
+5. Debug logs make the translated request shape understandable enough to diagnose future prompt-composition issues.
+
+## Non-Goals
+
+This project is not trying to:
+
+- turn Claude Code CLI into a raw pass-through transport
+- preserve OpenClaw's original request structure byte-for-byte
+- minimize tokens at all costs
+- rely on Claude session ids as the primary continuity mechanism
+- inline the entire OpenClaw memory corpus on every turn
+
+## Summary
+
+The current system is no longer a resume-first hybrid.
+
+It is a stateless per-turn bridge:
+
+- OpenClaw owns context policy and history
+- the proxy builds a deterministic request package
+- Claude Code CLI executes that package
+
+That is the current architecture because it is easier to reason about, easier to debug, and more reliable than relying on Claude-side continuity to preserve OpenClaw memory semantics.
+# Architecture
+
+## Purpose
+
+This project bridges OpenClaw to Claude Code CLI through a local Anthropic Messages-compatible proxy.
+
 The goal is not just to forward requests. The goal is to preserve OpenClaw as the orchestration layer while using Claude Code CLI as the execution/runtime engine.
 
 That means the system must satisfy both of these constraints:
