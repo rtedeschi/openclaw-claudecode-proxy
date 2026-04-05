@@ -770,6 +770,7 @@ const server = http.createServer(async (req, res) => {
         '--print',
         '--input-format=stream-json',
         '--output-format=stream-json',
+        '--dangerously-skip-permissions',
         '--model', effectiveModel,
         '--tools', CLAUDE_ALLOWED_TOOLS.join(','),
         '--disallowedTools', ...CLAUDE_DISALLOWED_TOOLS,
