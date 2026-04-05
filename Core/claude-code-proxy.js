@@ -327,6 +327,24 @@ function normalizeRequestedModel(model) {
     return modelMap[normalized] || normalized;
 }
 
+function shouldForceBootstrapForTurn(message) {
+    const contentText = serializeContent(message && message.content);
+    if (!contentText) {
+        return false;
+    }
+
+    const normalizedText = contentText.toLowerCase();
+    const startupMarkers = [
+        'a new session was started via /new or /reset',
+        'execute your session startup sequence now',
+        'read the required files before responding',
+        'new session was started via /new',
+        'session startup sequence'
+    ];
+
+    return startupMarkers.some((marker) => normalizedText.includes(marker));
+}
+
 function buildSdkInput(request, options) {
     const messages = Array.isArray(request.messages) ? request.messages : [];
     const lastUserIndex = [...messages]
@@ -343,8 +361,9 @@ function buildSdkInput(request, options) {
     const priorMessages = messages.slice(0, lastUserIndex);
     const systemText = extractSystemText(request.system);
     const resumedClaudeSessionId = options && options.claudeSessionId ? options.claudeSessionId : null;
+    const forceBootstrap = shouldForceBootstrapForTurn(lastUserMsg);
 
-    if (resumedClaudeSessionId) {
+    if (resumedClaudeSessionId && !forceBootstrap) {
         return {
             sdkInput: [
                 {
@@ -402,7 +421,7 @@ function buildSdkInput(request, options) {
 
     return {
         sdkInput,
-        mode: 'bootstrap'
+        mode: forceBootstrap ? 'bootstrap-reset' : 'bootstrap'
     };
 }
 
