@@ -1,12 +1,10 @@
 # openclaw-claudecode-proxy
 
-## Support this project
+## About
 
-This project is free and open source. If it saves you time or helps your team, you can support ongoing maintenance and development here:
+This project routes Anthropic Messages API requests through the real Claude Code CLI so OpenClaw can use Claude Code with native client attestation.
 
-- GitHub Sponsors: https://github.com/sponsors/rtedeschi
-
-Route Anthropic Messages API requests through the real Claude Code CLI so OpenClaw can use Claude Code with native client attestation.
+It is not a perfect solution. It is a pragmatic bridge to avoid losing months of OpenClaw work while keeping that workflow usable.
 
 The proxy now runs in a stateless per-turn mode: each OpenClaw turn is rebuilt from system instructions, a bounded recent-conversation window, and a deterministic memory digest instead of relying on Claude session resume for continuity.
 
@@ -66,7 +64,38 @@ If that fails, run `claude` once and complete authentication first.
 
 ## Getting started
 
-Run the installer for your supported operating system.
+Install and run the package for your supported operating system.
+
+### npm
+
+Run the installer directly with `npx`:
+
+```bash
+npx openclaw-claude-code-proxy
+```
+
+Or install it globally:
+
+```bash
+npm install -g openclaw-claude-code-proxy
+openclaw-claude-code-proxy install
+```
+
+To use a different local port:
+
+```bash
+npx openclaw-claude-code-proxy install 8788
+```
+
+To run the proxy in the foreground:
+
+```bash
+openclaw-claude-code-proxy serve
+```
+
+### Manual installers
+
+If you prefer not to use npm, run the platform installer directly.
 
 ### Ubuntu
 

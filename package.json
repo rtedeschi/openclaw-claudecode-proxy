@@ -1,0 +1,38 @@
+{
+  "name": "openclaw-claude-code-proxy",
+  "version": "0.1.0",
+  "description": "Install and run the OpenClaw Claude Code proxy on Ubuntu and Windows.",
+  "license": "MIT",
+  "bin": {
+    "openclaw-claude-code-proxy": "bin/openclaw-claude-code-proxy.js"
+  },
+  "files": [
+    "bin/",
+    "Core/",
+    "Ubuntu/",
+    "Windows/",
+    "ARCHITECTURE.md",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "openclaw",
+    "claude",
+    "proxy",
+    "cli"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rtedeschi/openclaw-claudecode-proxy.git"
+  },
+  "bugs": {
+    "url": "https://github.com/rtedeschi/openclaw-claudecode-proxy/issues"
+  },
+  "homepage": "https://github.com/rtedeschi/openclaw-claudecode-proxy#readme",
+  "publishConfig": {
+    "access": "public"
+  }
+}
