@@ -46,10 +46,18 @@ Windows install also requires:
 
 Required OpenClaw files:
 
-- `~/.openclaw/openclaw.json`
-- `%USERPROFILE%\.openclaw\openclaw.json`
+- Ubuntu: current user `~/.openclaw/openclaw.json` or root `/root/.openclaw/openclaw.json`
+- Windows: `%USERPROFILE%\.openclaw\openclaw.json`
 
-The setup script will stop if `~/.openclaw/openclaw.json` does not exist. If needed, run:
+On Ubuntu, the setup script resolves the target installation in this order:
+
+1. the invoking user's `~/.openclaw/openclaw.json`
+2. root's `/root/.openclaw/openclaw.json`
+3. fail if neither exists
+
+This matters for global `npm install -g` runs under `sudo`: the script now prefers the calling user's OpenClaw install before falling back to root.
+
+The setup script will stop if neither Ubuntu path exists. If needed, run:
 
 ```bash
 openclaw wizard
@@ -84,12 +92,21 @@ Install globally:
 npm install -g @rtedeschi/oc-claude-proxy-ubuntu
 ```
 
+If your npm client is still resolving the package from `registry.npmjs.org`, use an explicit registry override:
+
+```bash
+npm install -g @rtedeschi/oc-claude-proxy-ubuntu --registry=https://npm.pkg.github.com
+```
+
+`publishConfig.registry` controls where this package is published, but it does not force other machines to install from GitHub Packages. Install clients still need either the scoped `~/.npmrc` entry or the explicit `--registry` flag.
+
 On Ubuntu global installs, the package `postinstall` hook immediately:
 
-1. installs the proxy files into `~/.openclaw/workspace/scripts/`
-2. patches `~/.openclaw/openclaw.json`
-3. installs the user `systemd` service and cleanup timer
-4. starts the background daemon right away
+1. resolves whether to target the invoking user's OpenClaw install or root's
+2. installs the proxy files into that OpenClaw workspace's `scripts/` directory
+3. patches that installation's `openclaw.json`
+4. installs the matching user `systemd` service and cleanup timer
+5. starts the background daemon right away
 
 If you want a non-default port:
 
@@ -146,14 +163,15 @@ The Ubuntu entrypoint in `install` mode performs the following actions:
 1. Verifies the required platform tools, `node`, and `claude` are installed.
 2. Verifies Claude Code CLI is working.
 3. Backs up `openclaw.json` with a timestamp suffix.
-4. Copies the platform script and shared JS entrypoint to `~/.openclaw/workspace/scripts/` on Linux or `%USERPROFILE%\.openclaw\workspace\scripts\` on Windows.
-5. Adds or updates `models.providers["claude-code-proxy"]` in `openclaw.json`.
-6. Adds alias entries for `claude-code-proxy/claude-opus-4-5` and `claude-code-proxy/claude-sonnet-4-5`.
-7. Installs persistent startup.
+4. Resolves the target OpenClaw installation on Ubuntu by checking the invoking user's `~/.openclaw/openclaw.json` first and `/root/.openclaw/openclaw.json` second.
+5. Copies the platform script and shared JS entrypoint to the target OpenClaw workspace on Linux or `%USERPROFILE%\.openclaw\workspace\scripts\` on Windows.
+6. Adds or updates `models.providers["claude-code-proxy"]` in `openclaw.json`.
+7. Adds alias entries for `claude-code-proxy/claude-opus-4-5` and `claude-code-proxy/claude-sonnet-4-5`.
+8. Installs persistent startup.
 Ubuntu uses a user `systemd` service plus a user cleanup timer.
 Windows uses a Scheduled Task named `ClaudeCodeProxy`.
-8. Starts the background service or task on port `8787` by default.
-9. Attempts to restart the OpenClaw gateway.
+9. Starts the background service or task on port `8787` by default.
+10. Attempts to restart the OpenClaw gateway.
 
 On Ubuntu, the cleanup timer exists because current npm versions do not provide uninstall lifecycle scripts. When the package directory disappears after `npm uninstall -g`, the timer detects that removal and performs full cleanup of the service, installed files, and OpenClaw config entries within a few seconds.
 
