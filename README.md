@@ -10,22 +10,22 @@ The proxy now runs in a stateless per-turn mode: each OpenClaw turn is rebuilt f
 
 ## Supported platforms
 
-Only Ubuntu and Windows are currently supported.
+The published npm package targets Ubuntu.
 
-- Ubuntu: supported via `Ubuntu/claude-code-proxy.sh`
-- Windows: supported via `Windows/claude-code-proxy.bat`
+- Ubuntu: supported via GitHub Packages and `Ubuntu/claude-code-proxy.sh`
+- Windows: still supported from the repository via `Windows/claude-code-proxy.bat`
 - Other Linux distributions: not currently supported
 - macOS: not currently supported
 
 ## What this repo contains
 
 - `Core/claude-code-proxy.js`: Shared Node.js proxy implementation.
-- `Ubuntu/claude-code-proxy.sh`: Single Ubuntu entrypoint that installs the proxy, patches `openclaw.json`, installs a user `systemd` service, and runs the proxy in `serve` mode.
-- `Windows/claude-code-proxy.bat`: Single Windows entrypoint that installs the proxy, patches `openclaw.json`, registers a startup task, and runs the proxy in `serve` mode.
+- `Ubuntu/claude-code-proxy.sh`: Ubuntu service manager for install, uninstall, status, logs, and foreground serve.
+- `Windows/claude-code-proxy.bat`: Windows installer and startup-task runner kept in the repo for manual use.
 
 ## Requirements
 
-This repo includes separate entrypoints for Ubuntu and Windows only.
+This repo includes separate Ubuntu and Windows entrypoints, but the published npm package is Ubuntu-specific.
 
 Required tools:
 
@@ -37,6 +37,7 @@ Ubuntu install also requires:
 
 - `jq`
 - `systemctl`
+- `journalctl`
 
 Windows install also requires:
 
@@ -64,34 +65,44 @@ If that fails, run `claude` once and complete authentication first.
 
 ## Getting started
 
-Install and run the package for your supported operating system.
+### Install from GitHub Packages
 
-### npm
+GitHub Packages requires scoped registry configuration for install.
 
-Run the installer directly with `npx`:
+Add this to `~/.npmrc`:
 
-```bash
-npx openclaw-claude-code-proxy
+```ini
+@rtedeschi:registry=https://npm.pkg.github.com
+//npm.pkg.github.com/:_authToken=YOUR_GITHUB_PAT
 ```
 
-Or install it globally:
+The token needs at least `read:packages`.
+
+Install globally:
 
 ```bash
-npm install -g openclaw-claude-code-proxy
-openclaw-claude-code-proxy install
+npm install -g @rtedeschi/oc-claude-proxy-ubuntu
 ```
 
-To use a different local port:
+On Ubuntu global installs, the package `postinstall` hook immediately:
+
+1. installs the proxy files into `~/.openclaw/workspace/scripts/`
+2. patches `~/.openclaw/openclaw.json`
+3. installs the user `systemd` service and cleanup timer
+4. starts the background daemon right away
+
+If you want a non-default port:
 
 ```bash
-npx openclaw-claude-code-proxy install 8788
+oc-claude-proxy-ubuntu install 8788
 ```
 
-To run the proxy in the foreground:
+The published package exposes these CLI names:
 
-```bash
-openclaw-claude-code-proxy serve
-```
+- `oc-claude-proxy-ubuntu`
+- `openclaw-claude-code-proxy`
+
+With no arguments, the CLI prints current status.
 
 ### Manual installers
 
@@ -130,7 +141,7 @@ On Windows, run the installer elevated. The batch script updates `%USERPROFILE%\
 
 ## What the script does
 
-The platform entrypoint in `install` mode performs the following actions:
+The Ubuntu entrypoint in `install` mode performs the following actions:
 
 1. Verifies the required platform tools, `node`, and `claude` are installed.
 2. Verifies Claude Code CLI is working.
@@ -138,11 +149,13 @@ The platform entrypoint in `install` mode performs the following actions:
 4. Copies the platform script and shared JS entrypoint to `~/.openclaw/workspace/scripts/` on Linux or `%USERPROFILE%\.openclaw\workspace\scripts\` on Windows.
 5. Adds or updates `models.providers["claude-code-proxy"]` in `openclaw.json`.
 6. Adds alias entries for `claude-code-proxy/claude-opus-4-5` and `claude-code-proxy/claude-sonnet-4-5`.
-7. Installs persistent startup:
-Linux uses a user `systemd` service.
+7. Installs persistent startup.
+Ubuntu uses a user `systemd` service plus a user cleanup timer.
 Windows uses a Scheduled Task named `ClaudeCodeProxy`.
 8. Starts the background service or task on port `8787` by default.
 9. Attempts to restart the OpenClaw gateway.
+
+On Ubuntu, the cleanup timer exists because current npm versions do not provide uninstall lifecycle scripts. When the package directory disappears after `npm uninstall -g`, the timer detects that removal and performs full cleanup of the service, installed files, and OpenClaw config entries within a few seconds.
 
 At runtime, the proxy composes each turn statelessly from:
 
@@ -178,7 +191,13 @@ The proxy also normalizes these requested model names if they are sent by client
 Check the proxy service:
 
 ```bash
-systemctl --user status claude-code-proxy.service
+oc-claude-proxy-ubuntu status
+```
+
+Follow logs:
+
+```bash
+oc-claude-proxy-ubuntu logs -f
 ```
 
 On Windows, check the startup task:
@@ -190,7 +209,7 @@ schtasks /Query /TN "ClaudeCodeProxy"
 Restart it manually if needed:
 
 ```bash
-systemctl --user restart claude-code-proxy.service
+oc-claude-proxy-ubuntu restart
 ```
 
 On Windows, start it manually if needed:
@@ -213,18 +232,35 @@ http://localhost:8787
 
 If you used a custom `PROXY_PORT`, substitute that value.
 
+## Uninstall and cleanup
+
+For immediate, synchronous cleanup:
+
+```bash
+oc-claude-proxy-ubuntu uninstall
+npm uninstall -g @rtedeschi/oc-claude-proxy-ubuntu
+```
+
+If you remove the package first:
+
+```bash
+npm uninstall -g @rtedeschi/oc-claude-proxy-ubuntu
+```
+
+the installed cleanup timer notices the package root is gone and then stops and removes the proxy service, deletes installed files, and removes the `claude-code-proxy` provider entries from `~/.openclaw/openclaw.json`.
+
 ## Manual run
 
 If you do not want to use the `systemd` service, you can run the proxy directly:
 
 ```bash
-./Ubuntu/claude-code-proxy.sh serve
+oc-claude-proxy-ubuntu serve
 ```
 
 Or on a custom port:
 
 ```bash
-./Ubuntu/claude-code-proxy.sh serve 8788
+oc-claude-proxy-ubuntu serve 8788
 ```
 
 On Windows, run the proxy directly:
@@ -248,6 +284,31 @@ The service uses the same script in `serve` mode, so install and runtime now sha
 - Session state is stored in the system temp directory as `claude-code-proxy-state.json`.
 - Debug logs are written to the system temp directory as `claude-code-proxy-debug.log`.
 - The proxy limits Claude Code tool access to a restricted allowlist suitable for this bridge.
+
+## Publishing
+
+The repository includes [`.github/workflows/publish-github-package.yml`](.github/workflows/publish-github-package.yml), which:
+
+1. runs `npm pack` on pull requests and pushes to `main`
+2. uploads the generated tarball as a workflow artifact
+3. publishes to GitHub Packages on `v*` tags or manual workflow dispatch using `GITHUB_TOKEN`
+
+The package name published to GitHub Packages is `@rtedeschi/oc-claude-proxy-ubuntu`.
+
+## Development
+
+This repository installs a tracked Git `pre-commit` hook from [`.githooks/pre-commit`](/home/aera/.openclaw/workspace/FluxTrade/openclaw-claudecode-proxy/.githooks/pre-commit).
+
+The hook updates [package.json](/home/aera/.openclaw/workspace/FluxTrade/openclaw-claudecode-proxy/package.json) on each commit:
+
+1. normal commits bump the patch version
+2. if you manually change major or minor, the patch component is reset to `0`
+
+To re-install the hook path in a fresh clone:
+
+```bash
+npm run setup-hooks
+```
 
 ## License
 
