@@ -12,8 +12,8 @@ The proxy now runs in a stateless per-turn mode: each OpenClaw turn is rebuilt f
 
 Published npm packages target Ubuntu and Windows separately.
 
-- Ubuntu: supported via GitHub Packages and `Ubuntu/claude-code-proxy.sh`
-- Windows: supported via GitHub Packages and `Windows/claude-code-proxy.bat`
+- Ubuntu: published as `@rtedeschi/oc-claude-proxy-ubuntu`
+- Windows: published as `@rtedeschi/oc-claude-proxy-windows`
 - Other Linux distributions: not currently supported
 - macOS: not currently supported
 
@@ -73,6 +73,20 @@ If that fails, run `claude` once and complete authentication first.
 
 ## Getting started
 
+### Install from npm
+
+Install Ubuntu globally:
+
+```bash
+npm install -g @rtedeschi/oc-claude-proxy-ubuntu
+```
+
+Install Windows globally:
+
+```powershell
+npm install -g @rtedeschi/oc-claude-proxy-windows
+```
+
 ### Install from GitHub Packages
 
 GitHub Packages requires scoped registry configuration for install.
@@ -86,13 +100,13 @@ Add this to `~/.npmrc`:
 
 The token needs at least `read:packages`.
 
-Install Ubuntu globally:
+Install Ubuntu globally from GitHub Packages:
 
 ```bash
 npm install -g @rtedeschi/oc-claude-proxy-ubuntu
 ```
 
-Install Windows globally:
+Install Windows globally from GitHub Packages:
 
 ```powershell
 npm install -g @rtedeschi/oc-claude-proxy-windows

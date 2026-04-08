@@ -1,4 +1,4 @@
-name: Build and Publish Ubuntu Package
+name: Build and Publish GitHub Packages
 
 on:
   pull_request:
@@ -12,6 +12,15 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        package:
+          - name: ubuntu
+            directory: .
+            artifact-name: npm-package-ubuntu
+          - name: windows
+            directory: packages/windows
+            artifact-name: npm-package-windows
     permissions:
       contents: read
     steps:
@@ -23,24 +32,34 @@ jobs:
         with:
           node-version: 20
 
-      - name: Pack npm package
+      - name: Pack ${{ matrix.package.name }} npm package
         run: |
           set -euo pipefail
+          package_dir="${{ matrix.package.directory }}"
+          cd "$package_dir"
           npm pack
           tarball="$(ls -1 *.tgz | head -n 1)"
           echo "tarball=${tarball}" >> "$GITHUB_OUTPUT"
+          echo "artifact_path=${package_dir}/${tarball}" >> "$GITHUB_OUTPUT"
         id: pack
 
-      - name: Upload package artifact
+      - name: Upload ${{ matrix.package.name }} package artifact
         uses: actions/upload-artifact@v4
         with:
-          name: npm-package
-          path: ${{ steps.pack.outputs.tarball }}
+          name: ${{ matrix.package.artifact-name }}
+          path: ${{ steps.pack.outputs.artifact_path }}
 
   publish:
     needs: build
     if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        package:
+          - name: ubuntu
+            directory: .
+          - name: windows
+            directory: packages/windows
     permissions:
       contents: read
       packages: write
@@ -55,7 +74,10 @@ jobs:
           registry-url: https://npm.pkg.github.com
           scope: '@rtedeschi'
 
-      - name: Publish package
-        run: npm publish
+      - name: Publish ${{ matrix.package.name }} package
+        run: |
+          set -euo pipefail
+          cd "${{ matrix.package.directory }}"
+          npm publish --registry https://npm.pkg.github.com
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

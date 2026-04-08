@@ -1,0 +1,50 @@
+{
+  "name": "@rtedeschi/oc-claude-proxy-windows",
+  "version": "0.1.20",
+  "description": "Install and manage the OpenClaw Claude Code proxy as a startup task on Windows.",
+  "license": "MIT",
+  "bin": {
+    "oc-claude-proxy-windows": "bin/openclaw-claude-code-proxy.js",
+    "openclaw-claude-code-proxy-windows": "bin/openclaw-claude-code-proxy.js",
+    "oc-claude-proxy-windows-uninstall": "bin/openclaw-claude-code-proxy.js",
+    "openclaw-claude-code-proxy-windows-uninstall": "bin/openclaw-claude-code-proxy.js"
+  },
+  "scripts": {
+    "prepack": "node scripts/sync-package-files.js sync",
+    "postpack": "node scripts/sync-package-files.js clean",
+    "postinstall": "node scripts/postinstall.js",
+    "pack:check": "npm pack --dry-run"
+  },
+  "files": [
+    "bin/",
+    "Core/",
+    "Windows/",
+    "scripts/",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "os": [
+    "win32"
+  ],
+  "keywords": [
+    "openclaw",
+    "claude",
+    "proxy",
+    "cli",
+    "windows"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rtedeschi/openclaw-claudecode-proxy.git",
+    "directory": "packages/windows"
+  },
+  "bugs": {
+    "url": "https://github.com/rtedeschi/openclaw-claudecode-proxy/issues"
+  },
+  "homepage": "https://github.com/rtedeschi/openclaw-claudecode-proxy#readme",
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  }
+}

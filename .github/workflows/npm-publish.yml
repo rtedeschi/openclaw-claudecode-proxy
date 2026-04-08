@@ -1,4 +1,4 @@
-name: Publish npm package
+name: Publish npm packages
 
 on:
   release:
@@ -9,6 +9,13 @@ on:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        package:
+          - name: ubuntu
+            directory: .
+          - name: windows
+            directory: packages/windows
     permissions:
       contents: read
 
@@ -26,6 +33,7 @@ jobs:
         if: github.event_name == 'release'
         run: |
           set -euo pipefail
+          cd "${{ matrix.package.directory }}"
           PACKAGE_VERSION="$(node -p "require('./package.json').version")"
           RELEASE_TAG="${{ github.event.release.tag_name }}"
 
@@ -34,10 +42,16 @@ jobs:
             exit 1
           fi
 
-      - name: Verify npm package contents
-        run: npm pack --dry-run
+      - name: Verify ${{ matrix.package.name }} npm package contents
+        run: |
+          set -euo pipefail
+          cd "${{ matrix.package.directory }}"
+          npm pack --dry-run
 
-      - name: Publish to npm
-        run: npm publish --access public
+      - name: Publish ${{ matrix.package.name }} to npm
+        run: |
+          set -euo pipefail
+          cd "${{ matrix.package.directory }}"
+          npm publish --access public --registry https://registry.npmjs.org
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
