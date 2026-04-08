@@ -56,7 +56,7 @@ Usage:
   ./claude-code-proxy.sh logs [-f] [lines]
 
 Modes:
-    install                   Install the proxy, patch openclaw.json, set timeoutSeconds, install the user service, and start it.
+    install                   Install the proxy, patch openclaw.json, set timeoutSeconds and llm.idleTimeoutSeconds, install the user service, and start it.
   uninstall                 Stop and remove the service, clean OpenClaw config entries, and delete installed files.
   serve                     Run the proxy in the foreground. This is the mode used by systemd.
   start|stop|restart        Control the user systemd service.
@@ -390,6 +390,7 @@ write_install_state() {
             installedAt: $installedAt,
             port: ($port | tonumber),
             timeoutSeconds: ($timeoutSeconds | tonumber),
+            idleTimeoutSeconds: ($timeoutSeconds | tonumber),
             installedForUser: $installedForUser,
             openclawHome: $openclawHome,
             installedScript: $installedScript,
@@ -477,6 +478,8 @@ patch_openclaw_config() {
         | .agents //= {}
         | .agents.defaults //= {}
         | .agents.defaults.timeoutSeconds = ($timeout_seconds | tonumber)
+        | .agents.defaults.llm //= {}
+        | .agents.defaults.llm.idleTimeoutSeconds = ($timeout_seconds | tonumber)
         | .agents.defaults.models //= {}
         | .agents.defaults.models["claude-code-proxy/claude-opus-4-5"] = { "alias": "opus" }
         | .agents.defaults.models["claude-code-proxy/claude-sonnet-4-5"] = { "alias": "sonnet" }
@@ -500,6 +503,14 @@ remove_proxy_config_entries() {
           then .agents.defaults |= del(.timeoutSeconds)
           else .
           end
+                | if (.agents.defaults.llm.idleTimeoutSeconds // null) == ($timeout_seconds | tonumber)
+                    then .agents.defaults.llm |= del(.idleTimeoutSeconds)
+                    else .
+                    end
+                | if ((.agents.defaults.llm // {}) | keys | length) == 0
+                    then .agents.defaults |= del(.llm)
+                    else .
+                    end
         | .agents.defaults.models = ((.agents.defaults.models // {})
             | del(."claude-code-proxy/claude-opus-4-5")
             | del(."claude-code-proxy/claude-sonnet-4-5"))
@@ -605,6 +616,7 @@ print_summary() {
     echo "OpenClaw home: $OPENCLAW_HOME"
     echo "Installed provider: claude-code-proxy -> http://localhost:${PORT}"
     echo "Configured timeoutSeconds: ${TIMEOUT_SECONDS}"
+    echo "Configured llm.idleTimeoutSeconds: ${TIMEOUT_SECONDS}"
     echo "Proxy script: $INSTALLED_SCRIPT"
     echo "User service: $SYSTEMD_SERVICE_PATH"
     echo ""
@@ -699,7 +711,7 @@ install_proxy() {
     echo "======================================="
     echo ""
     echo "This installs the proxy service on port ${PORT}, patches openclaw.json, and starts the user service."
-    echo "OpenClaw timeoutSeconds will be set to ${TIMEOUT_SECONDS} to match the proxy request timeout."
+    echo "OpenClaw timeoutSeconds and llm.idleTimeoutSeconds will be set to ${TIMEOUT_SECONDS} to match the proxy request timeout."
     echo ""
 
     if [ ! -f "$OPENCLAW_CONFIG" ]; then

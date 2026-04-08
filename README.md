@@ -148,6 +148,8 @@ The Windows package exposes these CLI names:
 
 - `oc-claude-proxy-windows`
 - `openclaw-claude-code-proxy-windows`
+- `oc-claude-proxy-windows-uninstall`
+- `openclaw-claude-code-proxy-windows-uninstall`
 
 With no arguments, the Ubuntu CLI prints current status. With no arguments, the Windows CLI runs the installer.
 
@@ -198,7 +200,7 @@ The Ubuntu entrypoint in `install` mode performs the following actions:
 4. Resolves the target OpenClaw installation on Ubuntu by checking the invoking user's `~/.openclaw/openclaw.json` first and `/root/.openclaw/openclaw.json` second.
 5. Copies the platform script and shared JS entrypoint to the target OpenClaw workspace on Linux or `%USERPROFILE%\.openclaw\workspace\scripts\` on Windows.
 6. Adds or updates `models.providers["claude-code-proxy"]` in `openclaw.json`.
-7. Sets `agents.defaults.timeoutSeconds = 900` so OpenClaw matches the proxy request timeout.
+7. Sets `agents.defaults.timeoutSeconds = 900` and `agents.defaults.llm.idleTimeoutSeconds = 900` so OpenClaw matches the proxy request timeout and idle timeout.
 8. Adds alias entries for `claude-code-proxy/claude-opus-4-5` and `claude-code-proxy/claude-sonnet-4-5`.
 9. Installs persistent startup.
 Ubuntu uses a user `systemd` service.
@@ -216,7 +218,7 @@ At runtime, the proxy composes each turn statelessly from:
 
 The script does not automatically change `agents.defaults.model.primary`.
 It prints a suggestion to set it to one of the proxy-backed models after install.
-It does set `agents.defaults.timeoutSeconds` to `900` so OpenClaw's timeout matches the proxy request timeout.
+It does set `agents.defaults.timeoutSeconds` to `900` and `agents.defaults.llm.idleTimeoutSeconds` to `900` so OpenClaw's timeout settings match the proxy request timeout and idle timeout.
 
 ## Installed model mapping
 
@@ -282,7 +284,7 @@ http://localhost:8787
 
 If you used a custom `PROXY_PORT`, substitute that value.
 
-The proxy request timeout is explicitly set to `900` seconds by default, and the installers write the same value to `agents.defaults.timeoutSeconds`.
+The proxy request timeout is explicitly set to `900` seconds by default, and the installers write the same value to `agents.defaults.timeoutSeconds` and `agents.defaults.llm.idleTimeoutSeconds`.
 
 ## Uninstall and cleanup
 
@@ -293,16 +295,33 @@ oc-claude-proxy-ubuntu uninstall
 oc-claude-proxy-ubuntu-uninstall
 ```
 
+On Windows:
+
+```powershell
+oc-claude-proxy-windows uninstall
+oc-claude-proxy-windows-uninstall
+```
+
 The same cleanup can always be run through the installed script copy:
 
 ```bash
 ~/.openclaw/workspace/scripts/claude-code-proxy.sh uninstall
 ```
 
+On Windows, the installed script copy can also be used directly:
+
+```bat
+%USERPROFILE%\.openclaw\workspace\scripts\claude-code-proxy.bat uninstall
+```
+
 After manual cleanup completes, remove the npm package if you no longer want the CLI installed:
 
 ```bash
 npm uninstall -g @rtedeschi/oc-claude-proxy-ubuntu
+```
+
+```powershell
+npm uninstall -g @rtedeschi/oc-claude-proxy-windows
 ```
 
 ## Manual run

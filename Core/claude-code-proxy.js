@@ -614,9 +614,18 @@ function extractSessionIdFromOutputMessage(message) {
         : null;
 }
 
-function writeSseEvent(res, event, payload) {
-    res.write(`event: ${event}\n`);
-    res.write(`data: ${JSON.stringify(payload)}\n\n`);
+function writeSseEvent(res, event, payload, writeChunk = null, writeMeta = null) {
+    const chunk = `event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`;
+
+    if (typeof writeChunk === 'function') {
+        writeChunk(chunk, writeMeta || {
+            kind: 'sse_event',
+            sseEvent: event
+        });
+        return;
+    }
+
+    res.write(chunk);
 }
 
 function createStreamingResponseState(requestModel) {
@@ -652,7 +661,7 @@ function updateStreamingStateFromAssistantMessage(streamingState, assistantMessa
     streamingState.stopSequence = assistantMessage.stop_sequence || streamingState.stopSequence;
 }
 
-function ensureStreamingMessageStart(res, streamingState) {
+function ensureStreamingMessageStart(res, streamingState, writeChunk = null) {
     if (streamingState.messageStarted) {
         return;
     }
@@ -676,10 +685,10 @@ function ensureStreamingMessageStart(res, streamingState) {
                 cache_read_input_tokens: streamingState.usage.cache_read_input_tokens
             }
         }
-    });
+    }, writeChunk);
 }
 
-function ensureStreamingContentBlockStart(res, streamingState) {
+function ensureStreamingContentBlockStart(res, streamingState, writeChunk = null) {
     if (streamingState.blockStarted) {
         return;
     }
@@ -693,16 +702,16 @@ function ensureStreamingContentBlockStart(res, streamingState) {
             type: 'text',
             text: ''
         }
-    });
+    }, writeChunk);
 }
 
-function emitStreamingTextDelta(res, streamingState, nextText) {
+function emitStreamingTextDelta(res, streamingState, nextText, writeChunk = null) {
     if (!nextText) {
         return;
     }
 
-    ensureStreamingMessageStart(res, streamingState);
-    ensureStreamingContentBlockStart(res, streamingState);
+    ensureStreamingMessageStart(res, streamingState, writeChunk);
+    ensureStreamingContentBlockStart(res, streamingState, writeChunk);
 
     let deltaText = '';
     if (nextText.startsWith(streamingState.streamedText)) {
@@ -724,12 +733,16 @@ function emitStreamingTextDelta(res, streamingState, nextText) {
             type: 'text_delta',
             text: deltaText
         }
+    }, writeChunk, {
+        kind: 'text_delta',
+        deltaChars: deltaText.length,
+        totalStreamedChars: nextText.length
     });
 
     streamingState.streamedText = nextText;
 }
 
-function finalizeStreamingResponse(res, streamingState, assistantMessage, requestModel) {
+function finalizeStreamingResponse(res, streamingState, assistantMessage, requestModel, writeChunk = null) {
     if (streamingState.messageStopped) {
         return;
     }
@@ -738,17 +751,17 @@ function finalizeStreamingResponse(res, streamingState, assistantMessage, reques
 
     const finalText = extractText(assistantMessage && assistantMessage.content);
     if (finalText) {
-        emitStreamingTextDelta(res, streamingState, finalText);
+        emitStreamingTextDelta(res, streamingState, finalText, writeChunk);
     }
 
-    ensureStreamingMessageStart(res, streamingState);
+    ensureStreamingMessageStart(res, streamingState, writeChunk);
 
     if (streamingState.blockStarted && !streamingState.blockStopped) {
         streamingState.blockStopped = true;
         writeSseEvent(res, 'content_block_stop', {
             type: 'content_block_stop',
             index: 0
-        });
+        }, writeChunk);
     }
 
     writeSseEvent(res, 'message_delta', {
@@ -760,11 +773,11 @@ function finalizeStreamingResponse(res, streamingState, assistantMessage, reques
         usage: {
             output_tokens: streamingState.usage.output_tokens
         }
-    });
+    }, writeChunk);
 
     writeSseEvent(res, 'message_stop', {
         type: 'message_stop'
-    });
+    }, writeChunk);
 
     streamingState.messageStopped = true;
 }
@@ -891,8 +904,38 @@ const server = http.createServer(async (req, res) => {
     let responseFinished = false;
     let responseClosed = false;
     let clientDisconnected = false;
+    let streamingDebugState = null;
 
     const getElapsedMs = () => Date.now() - requestStartedAt;
+
+    const getStreamingDebugSnapshot = () => {
+        if (!streamingDebugState) {
+            return {};
+        }
+
+        return {
+            responseWriteCount: streamingDebugState.responseWriteCount,
+            responseBytesWritten: streamingDebugState.responseBytesWritten,
+            heartbeatCount: streamingDebugState.heartbeatCount,
+            textDeltaCount: streamingDebugState.textDeltaCount,
+            textDeltaChars: streamingDebugState.textDeltaChars,
+            firstAssistantMessageElapsedMs: streamingDebugState.firstAssistantMessageElapsedMs,
+            lastResponseWriteElapsedMs: streamingDebugState.lastResponseWriteElapsedMs,
+            lastResponseWriteKind: streamingDebugState.lastResponseWriteKind,
+            socketBytesWritten: streamingDebugState.lastObservedSocketBytesWritten
+        };
+    };
+
+    const logStreamingWriteSummary = (reason) => {
+        if (!streamingDebugState) {
+            return;
+        }
+
+        logLifecycleEvent('stream_response_write_summary', {
+            reason,
+            ...getStreamingDebugSnapshot()
+        });
+    };
 
     const logLifecycleEvent = (event, extra = {}) => {
         debugLog({
@@ -948,10 +991,12 @@ const server = http.createServer(async (req, res) => {
 
     res.on('finish', () => {
         responseFinished = true;
+        logStreamingWriteSummary('response_finished');
         logLifecycleEvent('response_finished', {
             statusCode: res.statusCode,
             headersSent: res.headersSent,
-            writableEnded: res.writableEnded
+            writableEnded: res.writableEnded,
+            ...getStreamingDebugSnapshot()
         });
     });
 
@@ -959,10 +1004,12 @@ const server = http.createServer(async (req, res) => {
         responseClosed = true;
         if (!responseFinished) {
             clientDisconnected = true;
+            logStreamingWriteSummary('response_closed_before_finish');
             logLifecycleEvent('response_closed_before_finish', {
                 statusCode: res.statusCode,
                 headersSent: res.headersSent,
-                writableEnded: res.writableEnded
+                writableEnded: res.writableEnded,
+                ...getStreamingDebugSnapshot()
             });
             terminateClaudeProcess('response_closed_before_finish');
         }
@@ -1069,14 +1116,79 @@ const server = http.createServer(async (req, res) => {
         });
 
         const streamingState = createStreamingResponseState(request.model);
+        streamingDebugState = {
+            responseWriteCount: 0,
+            responseBytesWritten: 0,
+            heartbeatCount: 0,
+            textDeltaCount: 0,
+            textDeltaChars: 0,
+            firstAssistantMessageElapsedMs: null,
+            lastResponseWriteElapsedMs: null,
+            lastResponseWriteKind: null,
+            lastObservedSocketBytesWritten: null
+        };
         let stdoutBuffer = '';
+
+        const writeStreamingChunk = (chunk, meta = {}) => {
+            const chunkText = typeof chunk === 'string' ? chunk : String(chunk);
+            const chunkBytes = Buffer.byteLength(chunkText);
+
+            res.write(chunkText);
+
+            streamingDebugState.responseWriteCount += 1;
+            streamingDebugState.responseBytesWritten += chunkBytes;
+            streamingDebugState.lastResponseWriteElapsedMs = getElapsedMs();
+            streamingDebugState.lastResponseWriteKind = meta.kind || 'unknown';
+            if (res.socket && typeof res.socket.bytesWritten === 'number') {
+                streamingDebugState.lastObservedSocketBytesWritten = res.socket.bytesWritten;
+            }
+
+            if (meta.kind === 'heartbeat') {
+                streamingDebugState.heartbeatCount += 1;
+                logLifecycleEvent('stream_heartbeat_written', {
+                    chunkBytes,
+                    ...getStreamingDebugSnapshot()
+                });
+                return;
+            }
+
+            if (meta.kind === 'text_delta') {
+                streamingDebugState.textDeltaCount += 1;
+                streamingDebugState.textDeltaChars += meta.deltaChars || 0;
+                logLifecycleEvent('stream_text_delta_written', {
+                    chunkBytes,
+                    deltaChars: meta.deltaChars || 0,
+                    totalStreamedChars: meta.totalStreamedChars || 0,
+                    ...getStreamingDebugSnapshot()
+                });
+            }
+        };
+
+        const noteFirstAssistantMessage = (assistantMessage, source) => {
+            if (streamingDebugState.firstAssistantMessageElapsedMs != null) {
+                return;
+            }
+
+            const assistantText = extractText(assistantMessage && assistantMessage.content);
+            streamingDebugState.firstAssistantMessageElapsedMs = getElapsedMs();
+            logLifecycleEvent('stream_first_assistant_message_parsed', {
+                source,
+                assistantContentChars: assistantText.length,
+                claudeOutputChars: claudeOutput.length,
+                stdoutBufferChars: stdoutBuffer.length,
+                ...getStreamingDebugSnapshot()
+            });
+        };
+
         const heartbeat = setInterval(() => {
             if (!res.writableEnded) {
-                res.write(': keep-alive\n\n');
+                writeStreamingChunk(': keep-alive\n\n', {
+                    kind: 'heartbeat'
+                });
             }
         }, 10000);
 
-        ensureStreamingMessageStart(res, streamingState);
+        ensureStreamingMessageStart(res, streamingState, writeStreamingChunk);
 
         claude.stdout.on('data', (data) => {
             const chunkText = data.toString();
@@ -1093,8 +1205,9 @@ const server = http.createServer(async (req, res) => {
                         const msg = JSON.parse(line);
 
                         if (msg.type === 'assistant' && msg.message) {
+                            noteFirstAssistantMessage(msg.message, 'stdout');
                             updateStreamingStateFromAssistantMessage(streamingState, msg.message, request.model);
-                            emitStreamingTextDelta(res, streamingState, extractText(msg.message.content));
+                            emitStreamingTextDelta(res, streamingState, extractText(msg.message.content), writeStreamingChunk);
                         }
 
                         if (msg.type === 'result') {
@@ -1121,8 +1234,9 @@ const server = http.createServer(async (req, res) => {
                     const msg = JSON.parse(trailingLine);
 
                     if (msg.type === 'assistant' && msg.message) {
+                        noteFirstAssistantMessage(msg.message, 'close_trailing_line');
                         updateStreamingStateFromAssistantMessage(streamingState, msg.message, request.model);
-                        emitStreamingTextDelta(res, streamingState, extractText(msg.message.content));
+                        emitStreamingTextDelta(res, streamingState, extractText(msg.message.content), writeStreamingChunk);
                     }
 
                     if (msg.type === 'result') {
@@ -1160,7 +1274,7 @@ const server = http.createServer(async (req, res) => {
                     elapsedMs: getElapsedMs(),
                     responsePreview: extractText(assistantMessage.content).slice(0, 400)
                 });
-                finalizeStreamingResponse(res, streamingState, assistantMessage, request.model);
+                finalizeStreamingResponse(res, streamingState, assistantMessage, request.model, writeStreamingChunk);
             } else {
                 debugLog({
                     event: 'stream_no_response',
@@ -1172,8 +1286,8 @@ const server = http.createServer(async (req, res) => {
                     rawOutputPreview: claudeOutput.slice(0, 1200)
                 });
 
-                emitStreamingTextDelta(res, streamingState, 'No response from Claude Code');
-                finalizeStreamingResponse(res, streamingState, null, request.model);
+                emitStreamingTextDelta(res, streamingState, 'No response from Claude Code', writeStreamingChunk);
+                finalizeStreamingResponse(res, streamingState, null, request.model, writeStreamingChunk);
             }
 
             if (!res.writableEnded) {
