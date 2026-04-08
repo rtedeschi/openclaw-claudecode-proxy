@@ -10,10 +10,10 @@ The proxy now runs in a stateless per-turn mode: each OpenClaw turn is rebuilt f
 
 ## Supported platforms
 
-The published npm package targets Ubuntu.
+Published npm packages target Ubuntu and Windows separately.
 
 - Ubuntu: supported via GitHub Packages and `Ubuntu/claude-code-proxy.sh`
-- Windows: still supported from the repository via `Windows/claude-code-proxy.bat`
+- Windows: supported via GitHub Packages and `Windows/claude-code-proxy.bat`
 - Other Linux distributions: not currently supported
 - macOS: not currently supported
 
@@ -25,7 +25,7 @@ The published npm package targets Ubuntu.
 
 ## Requirements
 
-This repo includes separate Ubuntu and Windows entrypoints, but the published npm package is Ubuntu-specific.
+This repo includes separate Ubuntu and Windows entrypoints, and each supported platform has its own npm package.
 
 Required tools:
 
@@ -86,16 +86,26 @@ Add this to `~/.npmrc`:
 
 The token needs at least `read:packages`.
 
-Install globally:
+Install Ubuntu globally:
 
 ```bash
 npm install -g @rtedeschi/oc-claude-proxy-ubuntu
+```
+
+Install Windows globally:
+
+```powershell
+npm install -g @rtedeschi/oc-claude-proxy-windows
 ```
 
 If your npm client is still resolving the package from `registry.npmjs.org`, use an explicit registry override:
 
 ```bash
 npm install -g @rtedeschi/oc-claude-proxy-ubuntu --registry=https://npm.pkg.github.com
+```
+
+```powershell
+npm install -g @rtedeschi/oc-claude-proxy-windows --registry=https://npm.pkg.github.com
 ```
 
 `publishConfig.registry` controls where this package is published, but it does not force other machines to install from GitHub Packages. Install clients still need either the scoped `~/.npmrc` entry or the explicit `--registry` flag.
@@ -105,21 +115,41 @@ On Ubuntu global installs, the package `postinstall` hook immediately:
 1. resolves whether to target the invoking user's OpenClaw install or root's
 2. installs the proxy files into that OpenClaw workspace's `scripts/` directory
 3. patches that installation's `openclaw.json`
-4. installs the matching user `systemd` service and cleanup timer
+4. installs the matching user `systemd` service
 5. starts the background daemon right away
 
-If you want a non-default port:
+On Windows global installs, the package `postinstall` hook immediately:
+
+1. installs the proxy files into `%USERPROFILE%\.openclaw\workspace\scripts\`
+2. patches `%USERPROFILE%\.openclaw\openclaw.json`
+3. registers the `ClaudeCodeProxy` Scheduled Task
+4. starts the task right away
+
+If you want a non-default Ubuntu port:
 
 ```bash
 oc-claude-proxy-ubuntu install 8788
 ```
 
-The published package exposes these CLI names:
+If you want a non-default Windows port:
+
+```powershell
+oc-claude-proxy-windows install 8788
+```
+
+The Ubuntu package exposes these CLI names:
 
 - `oc-claude-proxy-ubuntu`
 - `openclaw-claude-code-proxy`
+- `oc-claude-proxy-ubuntu-uninstall`
+- `openclaw-claude-code-proxy-uninstall`
 
-With no arguments, the CLI prints current status.
+The Windows package exposes these CLI names:
+
+- `oc-claude-proxy-windows`
+- `openclaw-claude-code-proxy-windows`
+
+With no arguments, the Ubuntu CLI prints current status. With no arguments, the Windows CLI runs the installer.
 
 ### Manual installers
 
@@ -156,6 +186,8 @@ Windows\claude-code-proxy.bat install 8788
 
 On Windows, run the installer elevated. The batch script updates `%USERPROFILE%\.openclaw\openclaw.json`, copies runtime files into the OpenClaw workspace, and registers a startup Scheduled Task.
 
+The Windows npm package lives in `packages/windows/` in this repository and is meant to be published separately as `@rtedeschi/oc-claude-proxy-windows`.
+
 ## What the script does
 
 The Ubuntu entrypoint in `install` mode performs the following actions:
@@ -168,12 +200,10 @@ The Ubuntu entrypoint in `install` mode performs the following actions:
 6. Adds or updates `models.providers["claude-code-proxy"]` in `openclaw.json`.
 7. Adds alias entries for `claude-code-proxy/claude-opus-4-5` and `claude-code-proxy/claude-sonnet-4-5`.
 8. Installs persistent startup.
-Ubuntu uses a user `systemd` service plus a user cleanup timer.
+Ubuntu uses a user `systemd` service.
 Windows uses a Scheduled Task named `ClaudeCodeProxy`.
 9. Starts the background service or task on port `8787` by default.
 10. Attempts to restart the OpenClaw gateway.
-
-On Ubuntu, the cleanup timer exists because current npm versions do not provide uninstall lifecycle scripts. When the package directory disappears after `npm uninstall -g`, the timer detects that removal and performs full cleanup of the service, installed files, and OpenClaw config entries within a few seconds.
 
 At runtime, the proxy composes each turn statelessly from:
 
@@ -256,16 +286,20 @@ For immediate, synchronous cleanup:
 
 ```bash
 oc-claude-proxy-ubuntu uninstall
-npm uninstall -g @rtedeschi/oc-claude-proxy-ubuntu
+oc-claude-proxy-ubuntu-uninstall
 ```
 
-If you remove the package first:
+The same cleanup can always be run through the installed script copy:
+
+```bash
+~/.openclaw/workspace/scripts/claude-code-proxy.sh uninstall
+```
+
+After manual cleanup completes, remove the npm package if you no longer want the CLI installed:
 
 ```bash
 npm uninstall -g @rtedeschi/oc-claude-proxy-ubuntu
 ```
-
-the installed cleanup timer notices the package root is gone and then stops and removes the proxy service, deletes installed files, and removes the `claude-code-proxy` provider entries from `~/.openclaw/openclaw.json`.
 
 ## Manual run
 

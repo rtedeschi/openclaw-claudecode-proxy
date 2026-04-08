@@ -6,6 +6,7 @@ const { spawnSync } = require('child_process');
 
 const repoRoot = path.resolve(__dirname, '..');
 const packageJsonPath = path.join(repoRoot, 'package.json');
+const windowsPackageJsonPath = path.join(repoRoot, 'packages', 'windows', 'package.json');
 
 function runGit(args, options = {}) {
     const result = spawnSync('git', args, {
@@ -116,12 +117,24 @@ function main() {
     packageJson.version = normalizedVersion;
     fs.writeFileSync(packageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`);
 
-    const addResult = runGit(['add', 'package.json']);
-    if (addResult.status !== 0) {
-        throw new Error(addResult.stderr || 'Unable to stage package.json.');
+    if (fs.existsSync(windowsPackageJsonPath)) {
+        const windowsPackageJson = readJson(windowsPackageJsonPath);
+        windowsPackageJson.version = normalizedVersion;
+        fs.writeFileSync(windowsPackageJsonPath, `${JSON.stringify(windowsPackageJson, null, 2)}\n`);
     }
 
-    process.stdout.write(`Updated package.json version to ${normalizedVersion}\n`);
+    const filesToAdd = ['package.json'];
+
+    if (fs.existsSync(windowsPackageJsonPath)) {
+        filesToAdd.push(path.relative(repoRoot, windowsPackageJsonPath));
+    }
+
+    const addResult = runGit(['add', ...filesToAdd]);
+    if (addResult.status !== 0) {
+        throw new Error(addResult.stderr || 'Unable to stage package manifests.');
+    }
+
+    process.stdout.write(`Updated package manifests to ${normalizedVersion}\n`);
 }
 
 try {

@@ -35,6 +35,7 @@ set "NON_NUMERIC="
 
 set "SHOULD_PAUSE=1"
 if /I "%MODE%"=="serve" set "SHOULD_PAUSE="
+if /I "%OC_PROXY_NO_PAUSE%"=="1" set "SHOULD_PAUSE="
 
 if /I "%MODE%"=="help" goto :usage
 if /I "%MODE%"=="--help" goto :usage

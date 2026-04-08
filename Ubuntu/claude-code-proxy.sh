@@ -23,10 +23,8 @@ INSTALL_STATE_PATH=""
 SYSTEMD_USER_DIR=""
 SYSTEMD_SERVICE_NAME="claude-code-proxy.service"
 SYSTEMD_SERVICE_PATH=""
-SYSTEMD_CLEANUP_SERVICE_NAME="claude-code-proxy-cleanup.service"
-SYSTEMD_CLEANUP_SERVICE_PATH=""
-SYSTEMD_CLEANUP_TIMER_NAME="claude-code-proxy-cleanup.timer"
-SYSTEMD_CLEANUP_TIMER_PATH=""
+LEGACY_CLEANUP_SERVICE_NAME="claude-code-proxy-cleanup.service"
+LEGACY_CLEANUP_TIMER_NAME="claude-code-proxy-cleanup.timer"
 DEBUG_LOG_PATH="${TMPDIR:-/tmp}/claude-code-proxy-debug.log"
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 DEFAULT_PORT="${PROXY_PORT:-8787}"
@@ -50,7 +48,6 @@ Usage:
   ./claude-code-proxy.sh restart
   ./claude-code-proxy.sh status
   ./claude-code-proxy.sh logs [-f] [lines]
-  ./claude-code-proxy.sh cleanup-if-package-missing
 
 Modes:
   install                   Install the proxy, patch openclaw.json, install the user service, and start it.
@@ -59,8 +56,6 @@ Modes:
   start|stop|restart        Control the user systemd service.
   status                    Show the service status, install metadata, and key file paths.
   logs                      Show recent journal logs for the service. Use -f to follow.
-  cleanup-if-package-missing
-                            Internal mode used by the cleanup timer after npm package removal.
 EOF
 }
 
@@ -111,7 +106,7 @@ pause_if_interactive() {
 on_exit_pause_if_needed() {
     local status=$?
 
-    if [ "$status" -ne 0 ] && [ "${MODE:-install}" != "serve" ] && [ "${MODE:-install}" != "cleanup-if-package-missing" ]; then
+    if [ "$status" -ne 0 ] && [ "${MODE:-install}" != "serve" ]; then
         pause_if_interactive
     fi
 }
@@ -202,8 +197,6 @@ set_openclaw_target() {
     INSTALL_STATE_PATH="${INSTALL_DIR}/claude-code-proxy-install-state.json"
     SYSTEMD_USER_DIR="${TARGET_USER_HOME}/.config/systemd/user"
     SYSTEMD_SERVICE_PATH="${SYSTEMD_USER_DIR}/${SYSTEMD_SERVICE_NAME}"
-    SYSTEMD_CLEANUP_SERVICE_PATH="${SYSTEMD_USER_DIR}/${SYSTEMD_CLEANUP_SERVICE_NAME}"
-    SYSTEMD_CLEANUP_TIMER_PATH="${SYSTEMD_USER_DIR}/${SYSTEMD_CLEANUP_TIMER_NAME}"
 }
 
 candidate_has_config() {
@@ -363,16 +356,6 @@ resolve_source_package_root() {
     printf '%s\n' ""
 }
 
-read_install_state_value() {
-    local jq_filter="$1"
-
-    if [ ! -f "$INSTALL_STATE_PATH" ]; then
-        return 1
-    fi
-
-    jq -r "$jq_filter // empty" "$INSTALL_STATE_PATH"
-}
-
 backup_file() {
     local file_path="$1"
     local backup_path
@@ -386,31 +369,24 @@ backup_file() {
 }
 
 write_install_state() {
-    local source_package_root
-    source_package_root="$(resolve_source_package_root)"
-
     mkdir -p "$INSTALL_DIR"
 
     jq -n \
         --arg installedAt "$(date --iso-8601=seconds)" \
-        --arg packageRoot "$source_package_root" \
         --arg port "$PORT" \
         --arg installedForUser "$TARGET_OPENCLAW_USER" \
         --arg openclawHome "$OPENCLAW_HOME" \
         --arg installedScript "$INSTALLED_SCRIPT" \
         --arg installedProxyJs "$INSTALLED_PROXY_JS" \
         --arg serviceName "$SYSTEMD_SERVICE_NAME" \
-        --arg cleanupTimerName "$SYSTEMD_CLEANUP_TIMER_NAME" \
         '{
             installedAt: $installedAt,
-            packageRoot: $packageRoot,
             port: ($port | tonumber),
             installedForUser: $installedForUser,
             openclawHome: $openclawHome,
             installedScript: $installedScript,
             installedProxyJs: $installedProxyJs,
-            serviceName: $serviceName,
-            cleanupTimerName: $cleanupTimerName
+            serviceName: $serviceName
         }' > "$INSTALL_STATE_PATH"
 
     ensure_target_ownership "$INSTALL_DIR" "$INSTALL_STATE_PATH"
@@ -539,53 +515,38 @@ RestartSec=5
 WantedBy=default.target
 EOF
 
-    cat > "$SYSTEMD_CLEANUP_SERVICE_PATH" <<EOF
-[Unit]
-Description=Cleanup Claude Code Proxy after package removal
-After=default.target
-
-[Service]
-Type=oneshot
-ExecStart=${INSTALLED_SCRIPT} cleanup-if-package-missing --no-pause
-EOF
-
-    cat > "$SYSTEMD_CLEANUP_TIMER_PATH" <<EOF
-[Unit]
-Description=Check whether the Claude Code Proxy npm package was removed
-
-[Timer]
-OnBootSec=10s
-OnUnitActiveSec=5s
-Unit=${SYSTEMD_CLEANUP_SERVICE_NAME}
-
-[Install]
-WantedBy=timers.target
-EOF
-
-    ensure_target_ownership "$SYSTEMD_USER_DIR" "$SYSTEMD_SERVICE_PATH" "$SYSTEMD_CLEANUP_SERVICE_PATH" "$SYSTEMD_CLEANUP_TIMER_PATH"
+    ensure_target_ownership "$SYSTEMD_USER_DIR" "$SYSTEMD_SERVICE_PATH"
 
     echo "✅ Installed user service at $SYSTEMD_SERVICE_PATH"
-    echo "✅ Installed cleanup service at $SYSTEMD_CLEANUP_SERVICE_PATH"
-    echo "✅ Installed cleanup timer at $SYSTEMD_CLEANUP_TIMER_PATH"
 }
 
 stop_existing_units() {
     run_target_systemctl stop "$SYSTEMD_SERVICE_NAME" 2> /dev/null || true
-    run_target_systemctl stop "$SYSTEMD_CLEANUP_TIMER_NAME" 2> /dev/null || true
-    run_target_systemctl stop "$SYSTEMD_CLEANUP_SERVICE_NAME" 2> /dev/null || true
+}
+
+remove_legacy_cleanup_units() {
+    local legacy_cleanup_service_path="${SYSTEMD_USER_DIR}/${LEGACY_CLEANUP_SERVICE_NAME}"
+    local legacy_cleanup_timer_path="${SYSTEMD_USER_DIR}/${LEGACY_CLEANUP_TIMER_NAME}"
+
+    run_target_systemctl stop "$LEGACY_CLEANUP_TIMER_NAME" 2> /dev/null || true
+    run_target_systemctl stop "$LEGACY_CLEANUP_SERVICE_NAME" 2> /dev/null || true
+    run_target_systemctl disable "$LEGACY_CLEANUP_TIMER_NAME" > /dev/null 2>&1 || true
+
+    rm -f "$legacy_cleanup_service_path" "$legacy_cleanup_timer_path"
+
+    run_target_systemctl reset-failed "$LEGACY_CLEANUP_SERVICE_NAME" > /dev/null 2>&1 || true
 }
 
 remove_systemd_units() {
     stop_existing_units
+    remove_legacy_cleanup_units
 
     run_target_systemctl disable "$SYSTEMD_SERVICE_NAME" > /dev/null 2>&1 || true
-    run_target_systemctl disable "$SYSTEMD_CLEANUP_TIMER_NAME" > /dev/null 2>&1 || true
 
-    rm -f "$SYSTEMD_SERVICE_PATH" "$SYSTEMD_CLEANUP_SERVICE_PATH" "$SYSTEMD_CLEANUP_TIMER_PATH"
+    rm -f "$SYSTEMD_SERVICE_PATH"
 
     run_target_systemctl daemon-reload || true
     run_target_systemctl reset-failed "$SYSTEMD_SERVICE_NAME" > /dev/null 2>&1 || true
-    run_target_systemctl reset-failed "$SYSTEMD_CLEANUP_SERVICE_NAME" > /dev/null 2>&1 || true
 
     echo "✅ Removed systemd units"
 }
@@ -593,11 +554,8 @@ remove_systemd_units() {
 enable_systemd_units() {
     run_target_systemctl daemon-reload
     run_target_systemctl enable "$SYSTEMD_SERVICE_NAME" > /dev/null
-    run_target_systemctl enable "$SYSTEMD_CLEANUP_TIMER_NAME" > /dev/null
     run_target_systemctl start "$SYSTEMD_SERVICE_NAME"
-    run_target_systemctl start "$SYSTEMD_CLEANUP_TIMER_NAME"
     echo "✅ User service enabled and started"
-    echo "✅ Cleanup timer enabled and started"
 
     if command -v loginctl > /dev/null 2>&1; then
         if loginctl enable-linger "$TARGET_OPENCLAW_USER" > /dev/null 2>&1; then
@@ -634,7 +592,6 @@ print_summary() {
     echo "Installed provider: claude-code-proxy -> http://localhost:${PORT}"
     echo "Proxy script: $INSTALLED_SCRIPT"
     echo "User service: $SYSTEMD_SERVICE_PATH"
-    echo "Cleanup timer: $SYSTEMD_CLEANUP_TIMER_PATH"
     echo ""
     echo "Suggested default model update:"
     echo "  agents.defaults.model.primary = claude-code-proxy/claude-opus-4-5"
@@ -654,7 +611,7 @@ print_uninstall_summary() {
     echo "============================================="
     echo "✅ Cleanup complete"
     echo ""
-    echo "Removed systemd service, cleanup timer, installed proxy files, and OpenClaw proxy config entries."
+    echo "Removed systemd service, installed proxy files, and OpenClaw proxy config entries."
     echo ""
 }
 
@@ -677,24 +634,21 @@ show_status() {
     fi
 
     echo "Service unit: $SYSTEMD_SERVICE_PATH"
-    echo "Cleanup timer: $SYSTEMD_CLEANUP_TIMER_PATH"
     echo "Debug log: $DEBUG_LOG_PATH"
     echo ""
 
     run_target_systemctl --no-pager status "$SYSTEMD_SERVICE_NAME" || true
-    echo ""
-    run_target_systemctl --no-pager status "$SYSTEMD_CLEANUP_TIMER_NAME" || true
 }
 
 show_logs() {
     require_command journalctl
 
     if [ "$FOLLOW_LOGS" = "1" ]; then
-        run_target_journalctl -u "$SYSTEMD_SERVICE_NAME" -u "$SYSTEMD_CLEANUP_SERVICE_NAME" -n "$LOG_LINES" -f -o short-iso
+        run_target_journalctl -u "$SYSTEMD_SERVICE_NAME" -n "$LOG_LINES" -f -o short-iso
         return 0
     fi
 
-    run_target_journalctl -u "$SYSTEMD_SERVICE_NAME" -u "$SYSTEMD_CLEANUP_SERVICE_NAME" -n "$LOG_LINES" --no-pager -o short-iso
+    run_target_journalctl -u "$SYSTEMD_SERVICE_NAME" -n "$LOG_LINES" --no-pager -o short-iso
 }
 
 service_control() {
@@ -751,6 +705,8 @@ install_proxy() {
     write_install_state
     patch_openclaw_config
     stop_existing_units
+    remove_legacy_cleanup_units
+    run_target_systemctl daemon-reload || true
     install_systemd_units
     enable_systemd_units
     restart_gateway
@@ -776,23 +732,6 @@ uninstall_proxy() {
     cleanup_installed_files
     restart_gateway
     print_uninstall_summary
-}
-
-cleanup_if_package_missing() {
-    local package_root
-
-    if [ ! -f "$INSTALL_STATE_PATH" ]; then
-        exit 0
-    fi
-
-    package_root="$(read_install_state_value '.packageRoot')"
-
-    if [ -z "$package_root" ] || [ -f "$package_root/package.json" ]; then
-        exit 0
-    fi
-
-    echo "Detected removed package root at $package_root"
-    uninstall_proxy
 }
 
 case "$MODE" in
@@ -829,10 +768,6 @@ case "$MODE" in
     logs)
         require_target_resolution
         show_logs
-        ;;
-    cleanup-if-package-missing)
-        require_target_resolution
-        cleanup_if_package_missing
         ;;
     -h|--help|help)
         usage

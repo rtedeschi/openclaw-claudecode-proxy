@@ -1,16 +1,19 @@
 {
   "name": "@rtedeschi/oc-claude-proxy-ubuntu",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Install and manage the OpenClaw Claude Code proxy as a background service on Ubuntu.",
   "license": "MIT",
   "bin": {
     "oc-claude-proxy-ubuntu": "bin/openclaw-claude-code-proxy.js",
-    "openclaw-claude-code-proxy": "bin/openclaw-claude-code-proxy.js"
+    "openclaw-claude-code-proxy": "bin/openclaw-claude-code-proxy.js",
+    "oc-claude-proxy-ubuntu-uninstall": "bin/openclaw-claude-code-proxy.js",
+    "openclaw-claude-code-proxy-uninstall": "bin/openclaw-claude-code-proxy.js"
   },
   "scripts": {
     "prepare": "node scripts/install-git-hooks.js",
     "postinstall": "node scripts/postinstall.js",
     "pack:check": "npm pack --dry-run",
+    "pack:check:windows": "cd packages/windows && npm pack --dry-run",
     "setup-hooks": "node scripts/install-git-hooks.js"
   },
   "files": [
