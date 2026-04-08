@@ -106,6 +106,14 @@ function debugLog(payload) {
     }
 }
 
+function createRequestId() {
+    if (typeof crypto.randomUUID === 'function') {
+        return crypto.randomUUID();
+    }
+
+    return `req_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+}
+
 function normalizeUsage(usage) {
     if (!usage) {
         return {
@@ -712,6 +720,93 @@ function parseClaudeOutput(output, requestModel) {
 }
 
 const server = http.createServer(async (req, res) => {
+    const requestId = createRequestId();
+    const requestStartedAt = Date.now();
+    let request = null;
+    let effectiveModel = null;
+    let sessionLookupKey = null;
+    let claude = null;
+    let claudeOutput = '';
+    let responseFinished = false;
+    let responseClosed = false;
+    let clientDisconnected = false;
+
+    const getElapsedMs = () => Date.now() - requestStartedAt;
+
+    const logLifecycleEvent = (event, extra = {}) => {
+        debugLog({
+            event,
+            requestId,
+            elapsedMs: getElapsedMs(),
+            path: req.url,
+            method: req.method,
+            model: request && request.model ? request.model : null,
+            effectiveModel,
+            sessionLookupKey,
+            ...extra
+        });
+    };
+
+    const terminateClaudeProcess = (reason) => {
+        if (!claude || claude.exitCode != null || claude.signalCode != null || claude.killed) {
+            return;
+        }
+
+        logLifecycleEvent('claude_process_terminated', { reason });
+        claude.kill('SIGTERM');
+    };
+
+    req.on('aborted', () => {
+        clientDisconnected = true;
+        logLifecycleEvent('request_aborted', {
+            requestComplete: req.complete,
+            readableAborted: req.readableAborted === true
+        });
+        terminateClaudeProcess('request_aborted');
+    });
+
+    req.on('close', () => {
+        if (!req.complete) {
+            clientDisconnected = true;
+            logLifecycleEvent('request_stream_closed_before_complete', {
+                requestComplete: req.complete,
+                readableAborted: req.readableAborted === true
+            });
+            terminateClaudeProcess('request_stream_closed_before_complete');
+        }
+    });
+
+    req.socket.on('timeout', () => {
+        logLifecycleEvent('request_socket_timeout', {
+            serverRequestTimeoutMs: server.requestTimeout,
+            serverHeadersTimeoutMs: server.headersTimeout,
+            serverSocketTimeoutMs: server.timeout,
+            serverKeepAliveTimeoutMs: server.keepAliveTimeout
+        });
+    });
+
+    res.on('finish', () => {
+        responseFinished = true;
+        logLifecycleEvent('response_finished', {
+            statusCode: res.statusCode,
+            headersSent: res.headersSent,
+            writableEnded: res.writableEnded
+        });
+    });
+
+    res.on('close', () => {
+        responseClosed = true;
+        if (!responseFinished) {
+            clientDisconnected = true;
+            logLifecycleEvent('response_closed_before_finish', {
+                statusCode: res.statusCode,
+                headersSent: res.headersSent,
+                writableEnded: res.writableEnded
+            });
+            terminateClaudeProcess('response_closed_before_finish');
+        }
+    });
+
     if (req.method !== 'POST' || !req.url.startsWith('/v1/messages')) {
         res.writeHead(404, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'Not found' }));
@@ -719,14 +814,26 @@ const server = http.createServer(async (req, res) => {
     }
 
     let body = '';
-    for await (const chunk of req) {
-        body += chunk;
+    try {
+        for await (const chunk of req) {
+            body += chunk;
+        }
+    } catch (error) {
+        logLifecycleEvent('request_body_read_failed', {
+            error: error.message,
+            requestComplete: req.complete,
+            readableAborted: req.readableAborted === true
+        });
+        return;
     }
 
-    let request;
     try {
         request = JSON.parse(body);
     } catch (error) {
+        logLifecycleEvent('request_json_parse_failed', {
+            error: error.message,
+            bodyPreview: body.slice(0, 800)
+        });
         res.writeHead(400, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'Invalid JSON' }));
         return;
@@ -744,8 +851,8 @@ const server = http.createServer(async (req, res) => {
     });
 
     const isStreaming = request.stream === true;
-    const effectiveModel = normalizeRequestedModel(request.model);
-    const sessionLookupKey = getSessionLookupKey(req, request);
+    effectiveModel = normalizeRequestedModel(request.model);
+    sessionLookupKey = getSessionLookupKey(req, request);
     const inputBuild = buildSdkInput(request);
 
     if (inputBuild.error) {
@@ -777,9 +884,15 @@ const server = http.createServer(async (req, res) => {
         '--verbose'
     ];
 
-    const claude = spawn('claude', claudeArgs, {
+    claude = spawn('claude', claudeArgs, {
         stdio: ['pipe', 'pipe', 'pipe'],
         cwd: DEFAULT_WORKING_DIRECTORY
+    });
+
+    logLifecycleEvent('claude_process_spawned', {
+        claudePid: claude.pid,
+        stream: isStreaming,
+        mode
     });
 
     for (const message of sdkInput) {
@@ -794,53 +907,82 @@ const server = http.createServer(async (req, res) => {
             Connection: 'keep-alive'
         });
 
-        let output = '';
-
         claude.stdout.on('data', (data) => {
-            output += data.toString();
+            claudeOutput += data.toString();
         });
 
         claude.on('close', () => {
-            const parsedOutput = parseClaudeOutput(output, request.model);
+            if (clientDisconnected || responseClosed) {
+                logLifecycleEvent('stream_response_skipped_after_disconnect', {
+                    statusCode: res.statusCode,
+                    headersSent: res.headersSent,
+                    writableEnded: res.writableEnded
+                });
+                if (!res.writableEnded) {
+                    res.end();
+                }
+                return;
+            }
+
+            const parsedOutput = parseClaudeOutput(claudeOutput, request.model);
             if (parsedOutput) {
                 const { assistantMessage } = parsedOutput;
                 debugLog({
                     event: 'stream_success',
+                    requestId,
                     model: request.model || null,
                     effectiveModel,
                     sessionLookupKey,
+                    elapsedMs: getElapsedMs(),
                     responsePreview: extractText(assistantMessage.content).slice(0, 400)
                 });
                 streamAnthropicMessage(res, assistantMessage);
             } else if (!res.headersSent) {
                 debugLog({
                     event: 'stream_no_response',
+                    requestId,
                     model: request.model || null,
                     effectiveModel,
                     sessionLookupKey,
-                    rawOutputPreview: output.slice(0, 1200)
+                    elapsedMs: getElapsedMs(),
+                    rawOutputPreview: claudeOutput.slice(0, 1200)
                 });
                 res.writeHead(500, { 'Content-Type': 'application/json' });
                 res.write(JSON.stringify({ error: 'No response from Claude Code' }));
             }
-            res.end();
+
+            if (!res.writableEnded) {
+                res.end();
+            }
         });
     } else {
-        let output = '';
-
         claude.stdout.on('data', (data) => {
-            output += data.toString();
+            claudeOutput += data.toString();
         });
 
         claude.on('close', () => {
-            const parsedOutput = parseClaudeOutput(output, request.model);
+            if (clientDisconnected || responseClosed) {
+                logLifecycleEvent('non_stream_response_skipped_after_disconnect', {
+                    statusCode: res.statusCode,
+                    headersSent: res.headersSent,
+                    writableEnded: res.writableEnded
+                });
+                if (!res.writableEnded) {
+                    res.end();
+                }
+                return;
+            }
+
+            const parsedOutput = parseClaudeOutput(claudeOutput, request.model);
             if (parsedOutput) {
                 const { assistantMessage } = parsedOutput;
                 debugLog({
                     event: 'non_stream_success',
+                    requestId,
                     model: request.model || null,
                     effectiveModel,
                     sessionLookupKey,
+                    elapsedMs: getElapsedMs(),
                     responsePreview: extractText(assistantMessage.content).slice(0, 400)
                 });
                 res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -850,10 +992,12 @@ const server = http.createServer(async (req, res) => {
 
             debugLog({
                 event: 'non_stream_no_response',
+                requestId,
                 model: request.model || null,
                 effectiveModel,
                 sessionLookupKey,
-                rawOutputPreview: output.slice(0, 1200)
+                elapsedMs: getElapsedMs(),
+                rawOutputPreview: claudeOutput.slice(0, 1200)
             });
 
             res.writeHead(500, { 'Content-Type': 'application/json' });
@@ -865,10 +1009,23 @@ const server = http.createServer(async (req, res) => {
         console.error(`[stderr] ${data.toString()}`);
         debugLog({
             event: 'claude_stderr',
+            requestId,
             model: request.model || null,
             effectiveModel,
             sessionLookupKey,
+            elapsedMs: getElapsedMs(),
             stderrPreview: data.toString().slice(0, 800)
+        });
+    });
+
+    claude.on('exit', (code, signal) => {
+        logLifecycleEvent('claude_process_exit', {
+            code,
+            signal,
+            clientDisconnected,
+            responseFinished,
+            responseClosed,
+            outputChars: claudeOutput.length
         });
     });
 
@@ -876,9 +1033,11 @@ const server = http.createServer(async (req, res) => {
         console.error(`[error] ${error.message}`);
         debugLog({
             event: 'claude_process_error',
+            requestId,
             model: request.model || null,
             effectiveModel,
             sessionLookupKey,
+            elapsedMs: getElapsedMs(),
             error: error.message
         });
         if (!res.headersSent) {
@@ -888,7 +1047,28 @@ const server = http.createServer(async (req, res) => {
     });
 });
 
+server.on('timeout', (socket) => {
+    debugLog({
+        event: 'server_socket_timeout',
+        remoteAddress: socket.remoteAddress || null,
+        remotePort: socket.remotePort || null,
+        serverRequestTimeoutMs: server.requestTimeout,
+        serverHeadersTimeoutMs: server.headersTimeout,
+        serverSocketTimeoutMs: server.timeout,
+        serverKeepAliveTimeoutMs: server.keepAliveTimeout
+    });
+});
+
 server.listen(PORT, () => {
     console.log(`Claude Code Proxy listening on http://localhost:${PORT}`);
     console.log(`Configure OpenClaw with baseUrl: http://localhost:${PORT}`);
+    console.log(`Server timeouts: request=${server.requestTimeout}ms headers=${server.headersTimeout}ms socket=${server.timeout}ms keepAlive=${server.keepAliveTimeout}ms`);
+    debugLog({
+        event: 'server_started',
+        port: PORT,
+        requestTimeoutMs: server.requestTimeout,
+        headersTimeoutMs: server.headersTimeout,
+        socketTimeoutMs: server.timeout,
+        keepAliveTimeoutMs: server.keepAliveTimeout
+    });
 });
