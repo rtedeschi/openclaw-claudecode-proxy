@@ -28,10 +28,16 @@ LEGACY_CLEANUP_TIMER_NAME="claude-code-proxy-cleanup.timer"
 DEBUG_LOG_PATH="${TMPDIR:-/tmp}/claude-code-proxy-debug.log"
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 DEFAULT_PORT="${PROXY_PORT:-8787}"
+if [ -n "${OC_PROXY_REQUEST_TIMEOUT_MS:-}" ]; then
+    DEFAULT_TIMEOUT_SECONDS="$(( (OC_PROXY_REQUEST_TIMEOUT_MS + 999) / 1000 ))"
+else
+    DEFAULT_TIMEOUT_SECONDS="${OC_PROXY_TIMEOUT_SECONDS:-900}"
+fi
 DEFAULT_LOG_LINES="${OC_PROXY_LOG_LINES:-200}"
 NO_PAUSE="${OC_PROXY_NO_PAUSE:-0}"
 FOLLOW_LOGS=0
 LOG_LINES="$DEFAULT_LOG_LINES"
+TIMEOUT_SECONDS="$DEFAULT_TIMEOUT_SECONDS"
 
 MODE="${1:-install}"
 PORT="$DEFAULT_PORT"
@@ -50,7 +56,7 @@ Usage:
   ./claude-code-proxy.sh logs [-f] [lines]
 
 Modes:
-  install                   Install the proxy, patch openclaw.json, install the user service, and start it.
+    install                   Install the proxy, patch openclaw.json, set timeoutSeconds, install the user service, and start it.
   uninstall                 Stop and remove the service, clean OpenClaw config entries, and delete installed files.
   serve                     Run the proxy in the foreground. This is the mode used by systemd.
   start|stop|restart        Control the user systemd service.
@@ -374,6 +380,7 @@ write_install_state() {
     jq -n \
         --arg installedAt "$(date --iso-8601=seconds)" \
         --arg port "$PORT" \
+        --arg timeoutSeconds "$TIMEOUT_SECONDS" \
         --arg installedForUser "$TARGET_OPENCLAW_USER" \
         --arg openclawHome "$OPENCLAW_HOME" \
         --arg installedScript "$INSTALLED_SCRIPT" \
@@ -382,6 +389,7 @@ write_install_state() {
         '{
             installedAt: $installedAt,
             port: ($port | tonumber),
+            timeoutSeconds: ($timeoutSeconds | tonumber),
             installedForUser: $installedForUser,
             openclawHome: $openclawHome,
             installedScript: $installedScript,
@@ -421,6 +429,7 @@ patch_openclaw_config() {
 
     jq \
         --arg proxy_port "$PORT" \
+        --arg timeout_seconds "$TIMEOUT_SECONDS" \
         '
         def proxy_models:
             [
@@ -467,6 +476,7 @@ patch_openclaw_config() {
         }
         | .agents //= {}
         | .agents.defaults //= {}
+        | .agents.defaults.timeoutSeconds = ($timeout_seconds | tonumber)
         | .agents.defaults.models //= {}
         | .agents.defaults.models["claude-code-proxy/claude-opus-4-5"] = { "alias": "opus" }
         | .agents.defaults.models["claude-code-proxy/claude-sonnet-4-5"] = { "alias": "sonnet" }
@@ -481,11 +491,15 @@ remove_proxy_config_entries() {
     local tmp_file
     tmp_file="$(mktemp)"
 
-    jq '
+    jq --arg timeout_seconds "$TIMEOUT_SECONDS" '
         .models //= {}
         | .models.providers = ((.models.providers // {}) | del(."claude-code-proxy"))
         | .agents //= {}
         | .agents.defaults //= {}
+        | if (.agents.defaults.timeoutSeconds // null) == ($timeout_seconds | tonumber)
+          then .agents.defaults |= del(.timeoutSeconds)
+          else .
+          end
         | .agents.defaults.models = ((.agents.defaults.models // {})
             | del(."claude-code-proxy/claude-opus-4-5")
             | del(."claude-code-proxy/claude-sonnet-4-5"))
@@ -590,6 +604,7 @@ print_summary() {
     echo "Target user: $TARGET_OPENCLAW_USER"
     echo "OpenClaw home: $OPENCLAW_HOME"
     echo "Installed provider: claude-code-proxy -> http://localhost:${PORT}"
+    echo "Configured timeoutSeconds: ${TIMEOUT_SECONDS}"
     echo "Proxy script: $INSTALLED_SCRIPT"
     echo "User service: $SYSTEMD_SERVICE_PATH"
     echo ""
@@ -684,6 +699,7 @@ install_proxy() {
     echo "======================================="
     echo ""
     echo "This installs the proxy service on port ${PORT}, patches openclaw.json, and starts the user service."
+    echo "OpenClaw timeoutSeconds will be set to ${TIMEOUT_SECONDS} to match the proxy request timeout."
     echo ""
 
     if [ ! -f "$OPENCLAW_CONFIG" ]; then

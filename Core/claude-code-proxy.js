@@ -10,6 +10,7 @@ const OPENCLAW_HOME = path.join(USER_HOME, '.openclaw');
 const OPENCLAW_WORKSPACE = path.join(OPENCLAW_HOME, 'workspace');
 const DEFAULT_WORKING_DIRECTORY = fs.existsSync(OPENCLAW_WORKSPACE) ? OPENCLAW_WORKSPACE : USER_HOME;
 const PORT = process.env.PORT || 8787;
+const REQUEST_TIMEOUT_MS = Number.parseInt(process.env.OC_PROXY_REQUEST_TIMEOUT_MS || '900000', 10);
 const TEMP_DIR = os.tmpdir();
 const DEBUG_LOG = path.join(TEMP_DIR, 'claude-code-proxy-debug.log');
 const SESSION_STATE_PATH = path.join(TEMP_DIR, 'claude-code-proxy-state.json');
@@ -618,6 +619,166 @@ function writeSseEvent(res, event, payload) {
     res.write(`data: ${JSON.stringify(payload)}\n\n`);
 }
 
+function createStreamingResponseState(requestModel) {
+    return {
+        messageStarted: false,
+        blockStarted: false,
+        blockStopped: false,
+        messageStopped: false,
+        assistantId: `msg_proxy_${Date.now()}`,
+        model: requestModel || 'claude-code-proxy',
+        usage: normalizeUsage(null),
+        streamedText: '',
+        stopReason: 'end_turn',
+        stopSequence: null
+    };
+}
+
+function updateStreamingStateFromAssistantMessage(streamingState, assistantMessage, requestModel) {
+    if (!assistantMessage || typeof assistantMessage !== 'object') {
+        return;
+    }
+
+    if (assistantMessage.id) {
+        streamingState.assistantId = assistantMessage.id;
+    }
+
+    if (assistantMessage.model || requestModel) {
+        streamingState.model = assistantMessage.model || requestModel || streamingState.model;
+    }
+
+    streamingState.usage = normalizeUsage(assistantMessage.usage || streamingState.usage);
+    streamingState.stopReason = assistantMessage.stop_reason || streamingState.stopReason;
+    streamingState.stopSequence = assistantMessage.stop_sequence || streamingState.stopSequence;
+}
+
+function ensureStreamingMessageStart(res, streamingState) {
+    if (streamingState.messageStarted) {
+        return;
+    }
+
+    streamingState.messageStarted = true;
+
+    writeSseEvent(res, 'message_start', {
+        type: 'message_start',
+        message: {
+            id: streamingState.assistantId,
+            type: 'message',
+            role: 'assistant',
+            model: streamingState.model,
+            content: [],
+            stop_reason: null,
+            stop_sequence: null,
+            usage: {
+                input_tokens: streamingState.usage.input_tokens,
+                output_tokens: 0,
+                cache_creation_input_tokens: streamingState.usage.cache_creation_input_tokens,
+                cache_read_input_tokens: streamingState.usage.cache_read_input_tokens
+            }
+        }
+    });
+}
+
+function ensureStreamingContentBlockStart(res, streamingState) {
+    if (streamingState.blockStarted) {
+        return;
+    }
+
+    streamingState.blockStarted = true;
+
+    writeSseEvent(res, 'content_block_start', {
+        type: 'content_block_start',
+        index: 0,
+        content_block: {
+            type: 'text',
+            text: ''
+        }
+    });
+}
+
+function emitStreamingTextDelta(res, streamingState, nextText) {
+    if (!nextText) {
+        return;
+    }
+
+    ensureStreamingMessageStart(res, streamingState);
+    ensureStreamingContentBlockStart(res, streamingState);
+
+    let deltaText = '';
+    if (nextText.startsWith(streamingState.streamedText)) {
+        deltaText = nextText.slice(streamingState.streamedText.length);
+    } else if (!streamingState.streamedText) {
+        deltaText = nextText;
+    } else {
+        deltaText = nextText;
+    }
+
+    if (!deltaText) {
+        return;
+    }
+
+    writeSseEvent(res, 'content_block_delta', {
+        type: 'content_block_delta',
+        index: 0,
+        delta: {
+            type: 'text_delta',
+            text: deltaText
+        }
+    });
+
+    streamingState.streamedText = nextText;
+}
+
+function finalizeStreamingResponse(res, streamingState, assistantMessage, requestModel) {
+    if (streamingState.messageStopped) {
+        return;
+    }
+
+    updateStreamingStateFromAssistantMessage(streamingState, assistantMessage, requestModel);
+
+    const finalText = extractText(assistantMessage && assistantMessage.content);
+    if (finalText) {
+        emitStreamingTextDelta(res, streamingState, finalText);
+    }
+
+    ensureStreamingMessageStart(res, streamingState);
+
+    if (streamingState.blockStarted && !streamingState.blockStopped) {
+        streamingState.blockStopped = true;
+        writeSseEvent(res, 'content_block_stop', {
+            type: 'content_block_stop',
+            index: 0
+        });
+    }
+
+    writeSseEvent(res, 'message_delta', {
+        type: 'message_delta',
+        delta: {
+            stop_reason: streamingState.stopReason,
+            stop_sequence: streamingState.stopSequence
+        },
+        usage: {
+            output_tokens: streamingState.usage.output_tokens
+        }
+    });
+
+    writeSseEvent(res, 'message_stop', {
+        type: 'message_stop'
+    });
+
+    streamingState.messageStopped = true;
+}
+
+function updateStreamingStateFromResult(streamingState, resultMessage) {
+    if (!resultMessage || typeof resultMessage !== 'object') {
+        return;
+    }
+
+    streamingState.usage = normalizeUsage(resultMessage.usage || streamingState.usage);
+    streamingState.stopReason = resultMessage.stop_reason || streamingState.stopReason;
+    streamingState.stopSequence = resultMessage.stop_sequence || streamingState.stopSequence;
+}
+
 function streamAnthropicMessage(res, assistantMessage) {
     const text = extractText(assistantMessage.content);
 
@@ -907,11 +1068,74 @@ const server = http.createServer(async (req, res) => {
             Connection: 'keep-alive'
         });
 
+        const streamingState = createStreamingResponseState(request.model);
+        let stdoutBuffer = '';
+        const heartbeat = setInterval(() => {
+            if (!res.writableEnded) {
+                res.write(': keep-alive\n\n');
+            }
+        }, 10000);
+
+        ensureStreamingMessageStart(res, streamingState);
+
         claude.stdout.on('data', (data) => {
-            claudeOutput += data.toString();
+            const chunkText = data.toString();
+            claudeOutput += chunkText;
+            stdoutBuffer += chunkText;
+
+            let newlineIndex = stdoutBuffer.indexOf('\n');
+            while (newlineIndex !== -1) {
+                const line = stdoutBuffer.slice(0, newlineIndex).trim();
+                stdoutBuffer = stdoutBuffer.slice(newlineIndex + 1);
+
+                if (line) {
+                    try {
+                        const msg = JSON.parse(line);
+
+                        if (msg.type === 'assistant' && msg.message) {
+                            updateStreamingStateFromAssistantMessage(streamingState, msg.message, request.model);
+                            emitStreamingTextDelta(res, streamingState, extractText(msg.message.content));
+                        }
+
+                        if (msg.type === 'result') {
+                            updateStreamingStateFromResult(streamingState, msg);
+                        }
+                    } catch (error) {
+                        logLifecycleEvent('stream_json_parse_failed', {
+                            error: error.message,
+                            linePreview: line.slice(0, 400)
+                        });
+                    }
+                }
+
+                newlineIndex = stdoutBuffer.indexOf('\n');
+            }
         });
 
         claude.on('close', () => {
+            clearInterval(heartbeat);
+
+            const trailingLine = stdoutBuffer.trim();
+            if (trailingLine) {
+                try {
+                    const msg = JSON.parse(trailingLine);
+
+                    if (msg.type === 'assistant' && msg.message) {
+                        updateStreamingStateFromAssistantMessage(streamingState, msg.message, request.model);
+                        emitStreamingTextDelta(res, streamingState, extractText(msg.message.content));
+                    }
+
+                    if (msg.type === 'result') {
+                        updateStreamingStateFromResult(streamingState, msg);
+                    }
+                } catch (error) {
+                    logLifecycleEvent('stream_json_parse_failed', {
+                        error: error.message,
+                        linePreview: trailingLine.slice(0, 400)
+                    });
+                }
+            }
+
             if (clientDisconnected || responseClosed) {
                 logLifecycleEvent('stream_response_skipped_after_disconnect', {
                     statusCode: res.statusCode,
@@ -936,8 +1160,8 @@ const server = http.createServer(async (req, res) => {
                     elapsedMs: getElapsedMs(),
                     responsePreview: extractText(assistantMessage.content).slice(0, 400)
                 });
-                streamAnthropicMessage(res, assistantMessage);
-            } else if (!res.headersSent) {
+                finalizeStreamingResponse(res, streamingState, assistantMessage, request.model);
+            } else {
                 debugLog({
                     event: 'stream_no_response',
                     requestId,
@@ -947,8 +1171,9 @@ const server = http.createServer(async (req, res) => {
                     elapsedMs: getElapsedMs(),
                     rawOutputPreview: claudeOutput.slice(0, 1200)
                 });
-                res.writeHead(500, { 'Content-Type': 'application/json' });
-                res.write(JSON.stringify({ error: 'No response from Claude Code' }));
+
+                emitStreamingTextDelta(res, streamingState, 'No response from Claude Code');
+                finalizeStreamingResponse(res, streamingState, null, request.model);
             }
 
             if (!res.writableEnded) {
@@ -1046,6 +1271,10 @@ const server = http.createServer(async (req, res) => {
         }
     });
 });
+
+server.requestTimeout = Number.isFinite(REQUEST_TIMEOUT_MS) && REQUEST_TIMEOUT_MS > 0
+    ? REQUEST_TIMEOUT_MS
+    : 900000;
 
 server.on('timeout', (socket) => {
     debugLog({

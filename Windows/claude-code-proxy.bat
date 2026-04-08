@@ -20,6 +20,14 @@ if defined PROXY_PORT (
     set "DEFAULT_PORT=8787"
 )
 
+if defined OC_PROXY_REQUEST_TIMEOUT_MS (
+    set /a DEFAULT_TIMEOUT_SECONDS=(%OC_PROXY_REQUEST_TIMEOUT_MS% + 999) / 1000
+) else if defined OC_PROXY_TIMEOUT_SECONDS (
+    set "DEFAULT_TIMEOUT_SECONDS=%OC_PROXY_TIMEOUT_SECONDS%"
+) else (
+    set "DEFAULT_TIMEOUT_SECONDS=900"
+)
+
 set "MODE=%~1"
 set "PORT=%~2"
 
@@ -140,6 +148,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$ErrorActionPreference='Stop';" ^
   "$path = [Environment]::ExpandEnvironmentVariables('%OPENCLAW_CONFIG%');" ^
   "$port = '%PORT%';" ^
+    "$timeoutSeconds = [int]'%DEFAULT_TIMEOUT_SECONDS%';" ^
   "$json = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json;" ^
   "if (-not $json.models) { $json | Add-Member -NotePropertyName models -NotePropertyValue ([pscustomobject]@{}) };" ^
   "if (-not $json.models.providers) { $json.models | Add-Member -NotePropertyName providers -NotePropertyValue ([pscustomobject]@{}) };" ^
@@ -147,6 +156,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$json.models.providers | Add-Member -NotePropertyName 'claude-code-proxy' -NotePropertyValue $proxyProvider -Force;" ^
   "if (-not $json.agents) { $json | Add-Member -NotePropertyName agents -NotePropertyValue ([pscustomobject]@{}) };" ^
   "if (-not $json.agents.defaults) { $json.agents | Add-Member -NotePropertyName defaults -NotePropertyValue ([pscustomobject]@{}) };" ^
+    "$json.agents.defaults | Add-Member -NotePropertyName timeoutSeconds -NotePropertyValue $timeoutSeconds -Force;" ^
   "if (-not $json.agents.defaults.models) { $json.agents.defaults | Add-Member -NotePropertyName models -NotePropertyValue ([pscustomobject]@{}) };" ^
   "$json.agents.defaults.models | Add-Member -NotePropertyName 'claude-code-proxy/claude-opus-4-5' -NotePropertyValue ([pscustomobject]@{ alias = 'opus' }) -Force;" ^
   "$json.agents.defaults.models | Add-Member -NotePropertyName 'claude-code-proxy/claude-sonnet-4-5' -NotePropertyValue ([pscustomobject]@{ alias = 'sonnet' }) -Force;" ^
@@ -204,6 +214,7 @@ echo =============================================
 echo Deployment complete
 echo.
 echo Installed provider: claude-code-proxy -^> http://localhost:%PORT%
+echo Configured timeoutSeconds: %DEFAULT_TIMEOUT_SECONDS%
 echo Proxy script: %INSTALLED_SCRIPT%
 echo Startup task: %TASK_NAME%
 echo.
@@ -239,6 +250,7 @@ echo Claude Code Proxy Setup for OpenClaw
 echo ====================================
 echo.
 echo This installs the proxy startup task on port %PORT%, patches openclaw.json, and starts the task.
+echo OpenClaw timeoutSeconds will be set to %DEFAULT_TIMEOUT_SECONDS% to match the proxy request timeout.
 echo.
 if not exist "%OPENCLAW_CONFIG%" (
     echo OpenClaw config not found at %OPENCLAW_CONFIG%

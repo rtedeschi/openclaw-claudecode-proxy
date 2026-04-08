@@ -198,12 +198,13 @@ The Ubuntu entrypoint in `install` mode performs the following actions:
 4. Resolves the target OpenClaw installation on Ubuntu by checking the invoking user's `~/.openclaw/openclaw.json` first and `/root/.openclaw/openclaw.json` second.
 5. Copies the platform script and shared JS entrypoint to the target OpenClaw workspace on Linux or `%USERPROFILE%\.openclaw\workspace\scripts\` on Windows.
 6. Adds or updates `models.providers["claude-code-proxy"]` in `openclaw.json`.
-7. Adds alias entries for `claude-code-proxy/claude-opus-4-5` and `claude-code-proxy/claude-sonnet-4-5`.
-8. Installs persistent startup.
+7. Sets `agents.defaults.timeoutSeconds = 900` so OpenClaw matches the proxy request timeout.
+8. Adds alias entries for `claude-code-proxy/claude-opus-4-5` and `claude-code-proxy/claude-sonnet-4-5`.
+9. Installs persistent startup.
 Ubuntu uses a user `systemd` service.
 Windows uses a Scheduled Task named `ClaudeCodeProxy`.
-9. Starts the background service or task on port `8787` by default.
-10. Attempts to restart the OpenClaw gateway.
+10. Starts the background service or task on port `8787` by default.
+11. Attempts to restart the OpenClaw gateway.
 
 At runtime, the proxy composes each turn statelessly from:
 
@@ -215,6 +216,7 @@ At runtime, the proxy composes each turn statelessly from:
 
 The script does not automatically change `agents.defaults.model.primary`.
 It prints a suggestion to set it to one of the proxy-backed models after install.
+It does set `agents.defaults.timeoutSeconds` to `900` so OpenClaw's timeout matches the proxy request timeout.
 
 ## Installed model mapping
 
@@ -279,6 +281,8 @@ http://localhost:8787
 ```
 
 If you used a custom `PROXY_PORT`, substitute that value.
+
+The proxy request timeout is explicitly set to `900` seconds by default, and the installers write the same value to `agents.defaults.timeoutSeconds`.
 
 ## Uninstall and cleanup
 
