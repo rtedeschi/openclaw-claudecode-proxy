@@ -15,11 +15,16 @@ const TEMP_DIR = os.tmpdir();
 const DEBUG_LOG = path.join(TEMP_DIR, 'claude-code-proxy-debug.log');
 const SESSION_STATE_PATH = path.join(TEMP_DIR, 'claude-code-proxy-state.json');
 const SESSION_TTL_MS = 6 * 60 * 60 * 1000;
-const MAX_CONTEXT_MESSAGES = 8;
-const MAX_CONTEXT_CHARS_PER_MESSAGE = 1200;
-const MAX_MEMORY_EXCERPT_CHARS = 2200;
-const MAX_DAILY_EXCERPT_CHARS = 2200;
-const MAX_RECENT_MEMORY_FILES = 3;
+// Context-window bounds. The previous values (8 messages x 1200 chars)
+// caused obvious conversational amnesia for anything non-trivial. These
+// values are still conservative relative to Claude's 200K window but are
+// large enough that real technical conversations no longer feel stateless.
+// Override at runtime with OC_PROXY_* env vars if needed.
+const MAX_CONTEXT_MESSAGES = Number.parseInt(process.env.OC_PROXY_MAX_CONTEXT_MESSAGES || '30', 10);
+const MAX_CONTEXT_CHARS_PER_MESSAGE = Number.parseInt(process.env.OC_PROXY_MAX_CONTEXT_CHARS_PER_MESSAGE || '6000', 10);
+const MAX_MEMORY_EXCERPT_CHARS = Number.parseInt(process.env.OC_PROXY_MAX_MEMORY_EXCERPT_CHARS || '20000', 10);
+const MAX_DAILY_EXCERPT_CHARS = Number.parseInt(process.env.OC_PROXY_MAX_DAILY_EXCERPT_CHARS || '8000', 10);
+const MAX_RECENT_MEMORY_FILES = Number.parseInt(process.env.OC_PROXY_MAX_RECENT_MEMORY_FILES || '5', 10);
 // Claude Code's full default tool surface is used. We do not hand --tools to
 // the child process, so all built-in CC tools (Read, Edit, Write, Bash, Grep,
 // Glob, WebFetch, WebSearch, Task, TodoWrite, NotebookEdit, etc.) are available.
