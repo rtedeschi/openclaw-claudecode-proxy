@@ -34,13 +34,16 @@ Shows everything configured in `~/.openclaw/openclaw.json` under `agents.default
 Example output (after proxy install):
 
 ```
-anthropic/claude-opus-4-7           (default)
+anthropic/claude-opus-4-7           (direct API)
 openai/gpt-5.4                      alias: GPT
 claude-cli/claude-sonnet-4-5
 claude-cli/claude-opus-4-5
 claude-cli/claude-haiku-4-5
-claude-code-proxy/claude-opus-4-5   alias: opus
-claude-code-proxy/claude-sonnet-4-5 alias: sonnet
+claude-code-proxy/claude-opus-4-7   alias: popus (default after install)
+claude-code-proxy/claude-opus-4-6
+claude-code-proxy/claude-opus-4-5
+claude-code-proxy/claude-sonnet-4-6 alias: psonnet
+claude-code-proxy/claude-sonnet-4-5
 ```
 
 ### Switch for ONE session
@@ -48,13 +51,13 @@ claude-code-proxy/claude-sonnet-4-5 alias: sonnet
 In the TUI, type:
 
 ```
-/model opus
+/model popus
 ```
 
-or the fully-qualified form:
+(or `psonnet` for Sonnet via the proxy) — or the fully-qualified form:
 
 ```
-/model claude-code-proxy/claude-opus-4-5
+/model claude-code-proxy/claude-opus-4-7
 ```
 
 That change lasts only for the current session. When you restart or open a new session, you're back on the default.
@@ -64,7 +67,7 @@ Under the hood this sets a `modelOverride` on the session entry. You can achieve
 ### Switch the DEFAULT permanently
 
 ```bash
-openclaw models set claude-code-proxy/claude-opus-4-5
+openclaw models set claude-code-proxy/claude-opus-4-7
 ```
 
 This writes to `agents.defaults.model.primary` in `openclaw.json`. All new sessions use this model.
@@ -92,34 +95,18 @@ If you don't need the proxy's memory wrapping, `claude-cli/*` is usually simpler
 
 ## Aliases
 
-Aliases make model IDs typeable. The proxy install attempts to register these two aliases in `openclaw.json`:
+Aliases make model IDs typeable. The proxy install registers two non-colliding aliases:
 
-- `opus` → `claude-code-proxy/claude-opus-4-5`
-- `sonnet` → `claude-code-proxy/claude-sonnet-4-5`
+- `popus` → `claude-code-proxy/claude-opus-4-7`
+- `psonnet` → `claude-code-proxy/claude-sonnet-4-6`
 
-⚠️ **Heads up: alias collision.** OpenClaw itself ships with an `opus` alias pointing to `anthropic/claude-opus-4-7` (direct API). When the proxy installs, it adds the alias inside its own `agents.defaults.models[...]` entry but does NOT overwrite your existing `opus` alias in `agents.defaults.aliases`. So after install you may see:
+The `p` prefix stands for "proxy" so they don't collide with OpenClaw's built-in `opus` alias (which points to `anthropic/claude-opus-4-7` on the direct API).
 
-```bash
-$ openclaw models aliases list
-Aliases (2):
-- GPT    -> openai/gpt-5.4
-- opus   -> anthropic/claude-opus-4-7   # NOT the proxy!
-```
-
-If you want `opus` to mean the proxy variant, set it explicitly:
+If you want `opus` itself to mean the proxy variant:
 
 ```bash
-openclaw models aliases set opus claude-code-proxy/claude-opus-4-5
+openclaw models aliases set opus claude-code-proxy/claude-opus-4-7
 ```
-
-Or use unambiguous names:
-
-```bash
-openclaw models aliases set popus claude-code-proxy/claude-opus-4-5
-openclaw models aliases set psonnet claude-code-proxy/claude-sonnet-4-5
-```
-
-(`p` prefix for "proxy".)
 
 To see all aliases:
 

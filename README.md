@@ -239,18 +239,41 @@ It does set `agents.defaults.timeoutSeconds` to `900` and `agents.defaults.llm.i
 After setup, OpenClaw has this proxy provider available:
 
 - Provider: `claude-code-proxy`
-- Available model IDs: `claude-code-proxy/claude-opus-4-5` and `claude-code-proxy/claude-sonnet-4-5`
+- Available model IDs:
+  - `claude-code-proxy/claude-opus-4-7` (alias: `popus`)
+  - `claude-code-proxy/claude-opus-4-6`
+  - `claude-code-proxy/claude-opus-4-5`
+  - `claude-code-proxy/claude-sonnet-4-6` (alias: `psonnet`)
+  - `claude-code-proxy/claude-sonnet-4-5`
 
-Suggested default model change:
+(The `p` prefix on the aliases stands for "proxy" and keeps them from
+colliding with OpenClaw's built-in `opus`/`sonnet` aliases that point
+at direct-API Anthropic models.)
 
-- `agents.defaults.model.primary = claude-code-proxy/claude-opus-4-5`
-- or `agents.defaults.model.primary = claude-code-proxy/claude-sonnet-4-5`
+Suggested default model:
 
-The proxy also normalizes these requested model names if they are sent by clients:
+- `agents.defaults.model.primary = claude-code-proxy/claude-opus-4-7`
 
-- `claude-opus-4-6` -> `claude-opus-4-5`
-- `claude-sonnet-4-6` -> `claude-sonnet-4-5`
-- `claude-haiku-4-6` -> `claude-haiku-4-5`
+Exact version IDs are passed through unchanged to Claude Code. If a client
+asks for a version Claude Code doesn't support, the CLI will error
+explicitly rather than silently rewriting the request.
+
+### Tuning knobs
+
+These environment variables adjust proxy behavior without a reinstall:
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `OC_PROXY_MAX_CONTEXT_MESSAGES` | 30 | How many prior messages to include |
+| `OC_PROXY_MAX_CONTEXT_CHARS_PER_MESSAGE` | 6000 | Per-message truncation |
+| `OC_PROXY_MAX_MEMORY_EXCERPT_CHARS` | 20000 | `MEMORY.md` excerpt size |
+| `OC_PROXY_MAX_DAILY_EXCERPT_CHARS` | 8000 | Today's daily-note excerpt size |
+| `OC_PROXY_MAX_RECENT_MEMORY_FILES` | 5 | How many recent daily notes to mention |
+| `OC_PROXY_JITTER_MIN_MS` | 200 | Minimum random delay between spawns |
+| `OC_PROXY_JITTER_MAX_MS` | 1200 | Maximum random delay between spawns |
+| `OC_PROXY_MIN_SPACING_MS` | 800 | Minimum spacing between consecutive spawns |
+
+Set jitter/spacing to 0 to disable human-pacing behavior.
 
 ## Verify the installation
 
