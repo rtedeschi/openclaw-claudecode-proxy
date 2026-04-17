@@ -489,18 +489,33 @@ function normalizeUserMessage(message) {
 }
 
 function normalizeRequestedModel(model) {
+    // Default when nothing is specified: latest Opus.
+    // Claude Code CLI accepts the 'opus'/'sonnet'/'haiku' aliases as 'latest',
+    // and it also accepts full model ids directly.
     if (typeof model !== 'string' || !model.trim()) {
-        return 'opus';
+        return 'claude-opus-4-7';
     }
 
     const normalized = model.trim();
-    const modelMap = {
-        'claude-opus-4-6': 'claude-opus-4-5',
-        'claude-sonnet-4-6': 'claude-sonnet-4-5',
-        'claude-haiku-4-6': 'claude-haiku-4-5'
-    };
 
-    return modelMap[normalized] || normalized;
+    // Strip any OpenClaw provider prefix (e.g. 'claude-code-proxy/claude-opus-4-5'
+    // or 'anthropic/claude-opus-4-7'). Claude Code itself does not want the
+    // provider prefix; it just wants the model id.
+    const prefixStripped = normalized.includes('/')
+        ? normalized.slice(normalized.lastIndexOf('/') + 1)
+        : normalized;
+
+    // Explicit alias handling. 'opus', 'sonnet', 'haiku' are passed through
+    // verbatim (CC resolves them to the latest known variant).
+    if (prefixStripped === 'opus' || prefixStripped === 'sonnet' || prefixStripped === 'haiku') {
+        return prefixStripped;
+    }
+
+    // Specific-version pass-through: if the caller asked for a concrete
+    // version, honor it so opus-4-5 / opus-4-6 / opus-4-7 all keep their
+    // identity. Claude Code will error if the version isn't supported;
+    // better to surface that than silently rewrite.
+    return prefixStripped;
 }
 
 function isStartupTurn(message) {
