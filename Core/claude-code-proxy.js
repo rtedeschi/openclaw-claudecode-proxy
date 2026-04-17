@@ -25,6 +25,42 @@ const MAX_CONTEXT_CHARS_PER_MESSAGE = Number.parseInt(process.env.OC_PROXY_MAX_C
 const MAX_MEMORY_EXCERPT_CHARS = Number.parseInt(process.env.OC_PROXY_MAX_MEMORY_EXCERPT_CHARS || '20000', 10);
 const MAX_DAILY_EXCERPT_CHARS = Number.parseInt(process.env.OC_PROXY_MAX_DAILY_EXCERPT_CHARS || '8000', 10);
 const MAX_RECENT_MEMORY_FILES = Number.parseInt(process.env.OC_PROXY_MAX_RECENT_MEMORY_FILES || '5', 10);
+
+// Human-pacing jitter. Real operators don't fire requests on a perfectly
+// clean machine cadence; there's always some think-time in between. Adding
+// a small random delay before spawning the child CLI hides the
+// pipeline-regular timing signature without materially hurting latency.
+const HUMAN_JITTER_MIN_MS = Number.parseInt(process.env.OC_PROXY_JITTER_MIN_MS || '200', 10);
+const HUMAN_JITTER_MAX_MS = Number.parseInt(process.env.OC_PROXY_JITTER_MAX_MS || '1200', 10);
+const HUMAN_MIN_SPACING_MS = Number.parseInt(process.env.OC_PROXY_MIN_SPACING_MS || '800', 10);
+
+let lastClaudeSpawnAt = 0;
+
+function humanSleepMs() {
+    // Random in-range, skewed slightly toward the low end (quadratic bias)
+    // so most calls are snappy but a few feel naturally sluggish.
+    const span = Math.max(0, HUMAN_JITTER_MAX_MS - HUMAN_JITTER_MIN_MS);
+    const r = Math.random();
+    const biased = r * r; // bias toward 0 (fast)
+    return HUMAN_JITTER_MIN_MS + Math.floor(biased * span);
+}
+
+function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function applyHumanPacing() {
+    const nowMs = Date.now();
+    const sinceLast = nowMs - lastClaudeSpawnAt;
+    const neededFloor = Math.max(0, HUMAN_MIN_SPACING_MS - sinceLast);
+    const jitter = humanSleepMs();
+    const totalWait = neededFloor + jitter;
+    if (totalWait > 0) {
+        await sleep(totalWait);
+    }
+    lastClaudeSpawnAt = Date.now();
+    return totalWait;
+}
 // Claude Code's full default tool surface is used. We do not hand --tools to
 // the child process, so all built-in CC tools (Read, Edit, Write, Bash, Grep,
 // Glob, WebFetch, WebSearch, Task, TodoWrite, NotebookEdit, etc.) are available.
@@ -1276,6 +1312,18 @@ const server = http.createServer(async (req, res) => {
         '--disallowedTools', ...CLAUDE_DISALLOWED_TOOLS,
         '--verbose'
     ];
+
+    // Add a small human-pacing delay so back-to-back proxy calls don't
+    // look metronomic. Disable entirely with OC_PROXY_MIN_SPACING_MS=0
+    // and OC_PROXY_JITTER_MAX_MS=0 if you need strict throughput.
+    const pacingWaitedMs = await applyHumanPacing();
+    if (pacingWaitedMs > 0) {
+        debugLog({
+            event: 'human_pacing_applied',
+            requestId,
+            waitedMs: pacingWaitedMs
+        });
+    }
 
     claude = spawn('claude', claudeArgs, {
         stdio: ['pipe', 'pipe', 'pipe'],
