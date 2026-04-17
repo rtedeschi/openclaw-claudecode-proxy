@@ -251,46 +251,34 @@ function getMemoryBootstrapContext() {
 }
 
 function buildMemoryBootstrapNotice() {
+    // Human-sounding version. Single paragraph, file paths mentioned
+    // in passing like you would if you were orienting a colleague.
     const context = getMemoryBootstrapContext();
-    const recentFilesSection = context.recentMemoryFiles.length > 0
-        ? context.recentMemoryFiles.map((filePath) => `- ${filePath}`).join('\n')
-        : '- No markdown files were detected in the memory directory at proxy translation time.';
+    const recentFilesList = context.recentMemoryFiles.length > 0
+        ? context.recentMemoryFiles.map((filePath) => path.basename(filePath)).join(', ')
+        : '(none yet)';
+    const memoryStatus = context.hasLongTermMemory
+        ? `long-term memory lives in ${context.memoryFile}`
+        : `long-term memory file (${context.memoryFile}) does not exist yet; you can create it when you have something worth remembering`;
+    const dailyStatus = context.hasTodayMemory
+        ? `today's daily note is at ${context.todaysMemoryFile}`
+        : `no daily note for today yet (${context.todaysMemoryFile})`;
 
-    return [
-        'Required startup memory loading:',
-        `- Workspace root: ${context.workspaceRoot}`,
-        `- Read baseline long-term memory from: ${context.memoryFile}`,
-        `- Long-term memory present right now: ${context.hasLongTermMemory ? 'yes' : 'no'}`,
-        `- Daily memory directory: ${context.memoryDir}`,
-        `- Daily memory markdown files present right now: ${context.memoryFiles.length}`,
-        `- Today's daily memory file path: ${context.todaysMemoryFile}`,
-        `- Today's daily memory file present right now: ${context.hasTodayMemory ? 'yes' : 'no'}`,
-        '- Most recent daily memory files observed on disk:',
-        recentFilesSection,
-        '- Do not claim that no daily memory files exist unless this inventory is empty and the listed paths cannot be read.',
-        '- If the user asks about ongoing work, prior commitments, or daily context, consult those memory files before answering.',
-        '- Treat these files as OpenClaw-owned context that should be loaded on startup/reset boundaries.'
-    ].join('\n');
+    return `Quick orientation: workspace is ${context.workspaceRoot}. ${memoryStatus}. Daily notes live under ${context.memoryDir} (${context.memoryFiles.length} files currently). ${dailyStatus}. Recent daily notes: ${recentFilesList}. Read these with the Read tool whenever you need prior context; don't assume they don't exist based on what's inline below.`;
 }
 
 function buildMemoryAnsweringNotice() {
-    return [
-        'Memory-answering rules:',
-        '- Answer the current user message directly after consulting memory.',
-        '- Do not repeat the previous assistant memory summary unless the user explicitly asks for a recap, restatement, or comparison.',
-        '- If the user is testing continuity, provide one or two specific facts that demonstrate recall, then stop.',
-        '- Prefer incremental answers over re-dumping long-term memory.'
-    ].join('\n');
+    // Merged memory-answering and response-focus into one short note.
+    // The old split was two nearly-identical bullet lists and made the
+    // prompt feel machine-generated.
+    return 'Treat the memory excerpts and recent messages below as background, not as the thing to respond about. Answer what the user actually just asked. If they want a recap they will say so.';
 }
 
 function buildResponseFocusNotice() {
-    return [
-        'Response rules:',
-        '- Use the memory digest and recent conversation context as background, not as the answer itself.',
-        '- Answer the current user message directly and specifically.',
-        '- Do not restate large memory sections unless the user explicitly asks for a recap or summary.',
-        '- If you cite memory, mention only the facts needed to answer the current turn.'
-    ].join('\n');
+    // Kept as a distinct function for call-site compatibility, but
+    // we fold its content into buildMemoryAnsweringNotice above and
+    // return empty here so the prompt doesn't duplicate itself.
+    return '';
 }
 
 function truncateText(text, maxChars) {
@@ -314,6 +302,9 @@ function readExcerpt(filePath, maxChars) {
 }
 
 function buildMemoryDigest() {
+    // Build a prose-style digest: a short orientation sentence followed
+    // by file excerpts with minimal ceremony. Previous version read like
+    // a printed ls output; this version reads like a handover note.
     const context = getMemoryBootstrapContext();
     const digestSections = [];
     const longTermExcerpt = context.hasLongTermMemory
@@ -327,25 +318,20 @@ function buildMemoryDigest() {
         .slice(-MAX_RECENT_MEMORY_FILES)
         .reverse();
 
-    digestSections.push('Memory digest inventory:');
-    digestSections.push(`- Long-term memory file: ${context.memoryFile} (${context.hasLongTermMemory ? 'present' : 'missing'})`);
-    digestSections.push(`- Today's daily file: ${context.todaysMemoryFile} (${context.hasTodayMemory ? 'present' : 'missing'})`);
-    digestSections.push(`- Daily markdown file count: ${context.memoryFiles.length}`);
-
-    if (recentDailyFiles.length > 0) {
-        digestSections.push('Recent daily files:');
-        digestSections.push(recentDailyFiles.map((filePath) => `- ${filePath}`).join('\n'));
-    }
-
     if (longTermExcerpt) {
-        digestSections.push(`Long-term memory excerpt (${context.memoryFile}):\n${longTermExcerpt}`);
+        digestSections.push(`From ${path.basename(context.memoryFile)} (long-term memory):\n\n${longTermExcerpt}`);
     }
 
     if (todaysExcerpt) {
-        digestSections.push(`Today's daily memory excerpt (${context.todaysMemoryFile}):\n${todaysExcerpt}`);
+        digestSections.push(`From today's daily note (${path.basename(context.todaysMemoryFile)}):\n\n${todaysExcerpt}`);
     }
 
-    return digestSections.join('\n\n');
+    if (recentDailyFiles.length > 0) {
+        const fileList = recentDailyFiles.map((f) => path.basename(f)).join(', ');
+        digestSections.push(`Also available for deeper context via Read tool: ${fileList}${context.memoryFiles.length > recentDailyFiles.length ? ` (and ${context.memoryFiles.length - recentDailyFiles.length - (context.hasTodayMemory ? 1 : 0)} older notes in ${context.memoryDir}).` : '.'}`);
+    }
+
+    return digestSections.join('\n\n---\n\n');
 }
 
 function buildConversationContext(messages, lastUserIndex) {
@@ -356,11 +342,14 @@ function buildConversationContext(messages, lastUserIndex) {
         return '';
     }
 
+    // Use lowercase role labels and lighter formatting. The old ALL-CAPS
+    // "USER:" / "ASSISTANT:" shape was a dead giveaway that the prompt was
+    // assembled by a pipeline, not typed by a person reviewing a transcript.
     return windowedMessages
         .map((message) => {
-            const role = (message.role || 'unknown').toUpperCase();
+            const role = message.role === 'assistant' ? 'assistant' : 'user';
             const content = truncateText(serializeContent(message.content), MAX_CONTEXT_CHARS_PER_MESSAGE);
-            return `${role}:\n${content}`;
+            return `[${role}]\n${content}`;
         })
         .join('\n\n');
 }
@@ -550,27 +539,52 @@ function buildSdkInput(request) {
 
     const sections = [];
 
+    // System instructions go first if provided. We do NOT wrap them in a
+    // 'System instructions:' header; OpenClaw's system text is already
+    // formatted appropriately for a persona prompt.
     if (systemText) {
-        sections.push(`System instructions:\n${systemText}\n\n${buildToolBridgeNotice()}`);
-    } else {
-        sections.push(`System instructions:\n${buildToolBridgeNotice()}`);
+        sections.push(systemText);
     }
 
-    sections.push(buildResponseFocusNotice());
-    sections.push(buildMemoryAnsweringNotice());
-    sections.push(buildMemoryBootstrapNotice());
-    sections.push(buildMemoryDigest());
+    const toolNotice = buildToolBridgeNotice();
+    if (toolNotice) {
+        sections.push(toolNotice);
+    }
+
+    const answeringNotice = buildMemoryAnsweringNotice();
+    if (answeringNotice) {
+        sections.push(answeringNotice);
+    }
+
+    // Response-focus notice was folded into the answering notice above;
+    // keeping the call for future-proofing but it returns empty now.
+    const responseNotice = buildResponseFocusNotice();
+    if (responseNotice) {
+        sections.push(responseNotice);
+    }
+
+    const bootstrapNotice = buildMemoryBootstrapNotice();
+    if (bootstrapNotice) {
+        sections.push(bootstrapNotice);
+    }
+
+    const digest = buildMemoryDigest();
+    if (digest) {
+        sections.push(digest);
+    }
 
     if (startupTurn) {
-        sections.push('Startup turn rules:\n- Execute the startup sequence using the memory digest and recent conversation context before replying.\n- Keep the greeting concise.');
+        sections.push('This is a fresh session start, so take a moment to consult the memory files above before replying. Keep the hello short.');
     }
 
     const transcript = buildConversationContext(messages, lastUserIndex);
     if (transcript) {
-        sections.push(`Recent conversation context:\n${transcript}`);
+        sections.push(`Recent conversation:\n\n${transcript}`);
     }
 
-    sections.push(`Current user message:\n${serializeContent(lastUserMsg.content)}`);
+    // Current user message appears last without a label, like any trailing
+    // user turn would in a natural conversation.
+    sections.push(serializeContent(lastUserMsg.content));
 
     const userContent = [
         {
