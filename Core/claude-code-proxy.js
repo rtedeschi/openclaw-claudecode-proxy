@@ -358,6 +358,147 @@ function includesAnyMarker(text, markers) {
     return markers.some((marker) => text.includes(marker));
 }
 
+// --------------------------------------------------------------------
+// OpenClaw session-transcript tap
+//
+// OpenClaw writes per-session conversation transcripts as JSONL at
+//   ~/.openclaw/agents/<agent-id>/sessions/<session-uuid>.jsonl
+// Each line is a structured event; message events carry {type: 'message',
+// message: {role, content}}.
+//
+// When we can identify which session-file goes with an incoming request,
+// we prefer its tail over the in-request `messages` array. That transcript
+// is the authoritative record of what the user and the assistant have
+// actually exchanged (including my earlier tool calls) and is what gives
+// the proxy real continuity instead of the 8-message amnesia window.
+//
+// Matching strategy: OpenClaw does not currently forward the agent-session
+// UUID in the request headers, so we fall back to "most recently touched
+// session file for the default agent". That's good enough in practice
+// because OpenClaw serializes requests per session anyway.
+// --------------------------------------------------------------------
+
+function getOpenclawSessionsDir(agentId) {
+    return path.join(OPENCLAW_HOME, 'agents', agentId || 'main', 'sessions');
+}
+
+function findMostRecentSessionTranscript(agentId) {
+    const dir = getOpenclawSessionsDir(agentId);
+
+    let entries;
+    try {
+        entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch (error) {
+        return null;
+    }
+
+    let best = null;
+    for (const entry of entries) {
+        if (!entry.isFile() || !entry.name.endsWith('.jsonl')) {
+            continue;
+        }
+
+        const fullPath = path.join(dir, entry.name);
+        let stat;
+        try {
+            stat = fs.statSync(fullPath);
+        } catch (error) {
+            continue;
+        }
+
+        if (!best || stat.mtimeMs > best.mtimeMs) {
+            best = { path: fullPath, mtimeMs: stat.mtimeMs };
+        }
+    }
+
+    return best ? best.path : null;
+}
+
+function readSessionTranscriptMessages(transcriptPath, maxMessages) {
+    // Read the last `maxMessages` message-role entries from a JSONL transcript.
+    // Uses a simple full-file read; session files cap around a few MB so this
+    // is fine for now. If they grow large we can stream from the tail.
+    let raw;
+    try {
+        raw = fs.readFileSync(transcriptPath, 'utf8');
+    } catch (error) {
+        return [];
+    }
+
+    const messages = [];
+    const lines = raw.split('\n');
+    for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        let event;
+        try {
+            event = JSON.parse(trimmed);
+        } catch (error) {
+            continue;
+        }
+
+        if (event.type !== 'message' || !event.message || typeof event.message !== 'object') {
+            continue;
+        }
+
+        const role = event.message.role;
+        if (role !== 'user' && role !== 'assistant') {
+            continue;
+        }
+
+        messages.push({
+            role,
+            content: event.message.content
+        });
+    }
+
+    if (maxMessages && messages.length > maxMessages) {
+        return messages.slice(-maxMessages);
+    }
+    return messages;
+}
+
+function buildTranscriptContext(agentId, options = {}) {
+    // Try to build a conversation-context block from OpenClaw's on-disk
+    // transcript. Returns an empty string if no transcript is available so
+    // the caller can fall back to the in-request messages.
+    const {
+        maxMessages = MAX_CONTEXT_MESSAGES,
+        maxCharsPerMessage = MAX_CONTEXT_CHARS_PER_MESSAGE,
+        excludeTrailingUser = true
+    } = options;
+
+    const transcriptPath = findMostRecentSessionTranscript(agentId);
+    if (!transcriptPath) {
+        return { text: '', source: null, count: 0 };
+    }
+
+    // Pull a generous amount and then tail-trim so we always have room to
+    // skip the most recent user turn (which is already in the current
+    // request's `messages`).
+    let messages = readSessionTranscriptMessages(transcriptPath, maxMessages + 4);
+    if (excludeTrailingUser) {
+        while (messages.length > 0 && messages[messages.length - 1].role === 'user') {
+            messages.pop();
+        }
+    }
+    messages = messages.slice(-maxMessages);
+
+    if (messages.length === 0) {
+        return { text: '', source: transcriptPath, count: 0 };
+    }
+
+    const text = messages
+        .map((message) => {
+            const role = message.role === 'assistant' ? 'assistant' : 'user';
+            const content = truncateText(serializeContent(message.content), maxCharsPerMessage);
+            return `[${role}]\n${content}`;
+        })
+        .join('\n\n');
+
+    return { text, source: transcriptPath, count: messages.length };
+}
+
 function getHeaderValue(headers, name) {
     const value = headers[name];
     if (Array.isArray(value)) {
@@ -592,7 +733,14 @@ function buildSdkInput(request) {
         sections.push('This is a fresh session start, so take a moment to consult the memory files above before replying. Keep the hello short.');
     }
 
-    const transcript = buildConversationContext(messages, lastUserIndex);
+    // Prefer the on-disk OpenClaw transcript for continuity. Fall back to
+    // the in-request message array when no transcript exists (e.g. when the
+    // proxy is running for a non-OpenClaw Anthropic client).
+    const transcriptContext = buildTranscriptContext();
+    const transcript = transcriptContext.text
+        ? transcriptContext.text
+        : buildConversationContext(messages, lastUserIndex);
+
     if (transcript) {
         sections.push(`Recent conversation:\n\n${transcript}`);
     }
