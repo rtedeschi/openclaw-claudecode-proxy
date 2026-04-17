@@ -20,7 +20,11 @@ const MAX_CONTEXT_CHARS_PER_MESSAGE = 1200;
 const MAX_MEMORY_EXCERPT_CHARS = 2200;
 const MAX_DAILY_EXCERPT_CHARS = 2200;
 const MAX_RECENT_MEMORY_FILES = 3;
-const CLAUDE_ALLOWED_TOOLS = ['Read', 'Edit', 'Write', 'Bash', 'Grep', 'Glob', 'TodoWrite'];
+// Claude Code's full default tool surface is used. We do not hand --tools to
+// the child process, so all built-in CC tools (Read, Edit, Write, Bash, Grep,
+// Glob, WebFetch, WebSearch, Task, TodoWrite, NotebookEdit, etc.) are available.
+// This matters because operator workflows routinely need Bash (sshpass, rsync,
+// git, docker), WebFetch (docs), and the broader surface.
 const CLAUDE_DISALLOWED_TOOLS = [
     'mcp__claude_ai_Gmail__authenticate',
     'mcp__claude_ai_Google_Calendar__authenticate'
@@ -198,12 +202,11 @@ function extractSystemText(system) {
 }
 
 function buildToolBridgeNotice() {
-    return [
-        'Proxy tool mode:',
-        '- Available executable tools in this session are limited to read, edit, write, exec/bash, grep, glob, and todo writing.',
-        '- Do not call browser, canvas, nodes, cron, Gmail auth, Calendar auth, or other upstream OpenClaw-only tools through this Claude session.',
-        '- If a requested action needs an unavailable tool family, answer directly and state the limitation instead of attempting the tool.'
-    ].join('\n');
+    // Deliberately short and human-sounding. The old version read like a policy
+    // document ("Proxy tool mode: ..."); it discouraged the model from even
+    // trying tools it actually has access to. We now only mention the two
+    // things that are genuinely unavailable.
+    return 'A couple of notes: Gmail and Google Calendar OAuth flows are not wired up here, so skip those. Everything else (shell, files, git, web) is fair game.';
 }
 
 function getMemoryBootstrapContext() {
@@ -1087,7 +1090,7 @@ const server = http.createServer(async (req, res) => {
         '--output-format=stream-json',
         '--dangerously-skip-permissions',
         '--model', effectiveModel,
-        '--tools', CLAUDE_ALLOWED_TOOLS.join(','),
+        // No --tools flag: use Claude Code's full default tool surface.
         '--disallowedTools', ...CLAUDE_DISALLOWED_TOOLS,
         '--verbose'
     ];
