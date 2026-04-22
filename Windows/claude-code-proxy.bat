@@ -148,7 +148,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$json = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json;" ^
   "if (-not $json.models) { $json | Add-Member -NotePropertyName models -NotePropertyValue ([pscustomobject]@{}) };" ^
   "if (-not $json.models.providers) { $json.models | Add-Member -NotePropertyName providers -NotePropertyValue ([pscustomobject]@{}) };" ^
-  "$proxyProvider = [pscustomobject]@{ baseUrl = ('http://localhost:' + $port); apiKey = 'proxy-no-key-needed'; api = 'anthropic-messages'; headers = [pscustomobject]@{}; models = @([pscustomobject]@{ id = 'claude-opus-4-5'; name = 'Claude Opus 4.5 (Proxy)'; api = 'anthropic-messages'; reasoning = $false; input = @('text'); cost = [pscustomobject]@{ input = 0; output = 0; cacheRead = 0; cacheWrite = 0 }; contextWindow = 200000; maxTokens = 8192 }, [pscustomobject]@{ id = 'claude-sonnet-4-5'; name = 'Claude Sonnet 4.5 (Proxy)'; api = 'anthropic-messages'; reasoning = $false; input = @('text'); cost = [pscustomobject]@{ input = 0; output = 0; cacheRead = 0; cacheWrite = 0 }; contextWindow = 200000; maxTokens = 8192 }) };" ^
+    "$proxyProvider = [pscustomobject]@{ baseUrl = ('http://localhost:' + $port); apiKey = 'proxy-no-key-needed'; api = 'anthropic-messages'; headers = [pscustomobject]@{}; models = @([pscustomobject]@{ id = 'claude-opus-4-7'; name = 'Claude Opus 4.7 (Proxy)'; api = 'anthropic-messages'; reasoning = $false; input = @('text'); cost = [pscustomobject]@{ input = 5; output = 25; cacheRead = 0.5; cacheWrite = 6.25 }; contextWindow = 200000; maxTokens = 8192 }, [pscustomobject]@{ id = 'claude-opus-4-6'; name = 'Claude Opus 4.6 (Proxy)'; api = 'anthropic-messages'; reasoning = $false; input = @('text'); cost = [pscustomobject]@{ input = 5; output = 25; cacheRead = 0.5; cacheWrite = 6.25 }; contextWindow = 200000; maxTokens = 8192 }, [pscustomobject]@{ id = 'claude-opus-4-5'; name = 'Claude Opus 4.5 (Proxy)'; api = 'anthropic-messages'; reasoning = $false; input = @('text'); cost = [pscustomobject]@{ input = 5; output = 25; cacheRead = 0.5; cacheWrite = 6.25 }; contextWindow = 200000; maxTokens = 8192 }, [pscustomobject]@{ id = 'claude-sonnet-4-5'; name = 'Claude Sonnet 4.5 (Proxy)'; api = 'anthropic-messages'; reasoning = $false; input = @('text'); cost = [pscustomobject]@{ input = 3; output = 15; cacheRead = 0.3; cacheWrite = 3.75 }; contextWindow = 200000; maxTokens = 8192 }, [pscustomobject]@{ id = 'claude-haiku-4-5'; name = 'Claude Haiku 4.5 (Proxy)'; api = 'anthropic-messages'; reasoning = $false; input = @('text'); cost = [pscustomobject]@{ input = 1; output = 5; cacheRead = 0.1; cacheWrite = 1.25 }; contextWindow = 200000; maxTokens = 8192 }) };" ^
   "$json.models.providers | Add-Member -NotePropertyName 'claude-code-proxy' -NotePropertyValue $proxyProvider -Force;" ^
   "if (-not $json.agents) { $json | Add-Member -NotePropertyName agents -NotePropertyValue ([pscustomobject]@{}) };" ^
   "if (-not $json.agents.defaults) { $json.agents | Add-Member -NotePropertyName defaults -NotePropertyValue ([pscustomobject]@{}) };" ^
@@ -156,8 +156,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "if (-not $json.agents.defaults.llm) { $json.agents.defaults | Add-Member -NotePropertyName llm -NotePropertyValue ([pscustomobject]@{}) };" ^
     "$json.agents.defaults.llm | Add-Member -NotePropertyName idleTimeoutSeconds -NotePropertyValue $timeoutSeconds -Force;" ^
   "if (-not $json.agents.defaults.models) { $json.agents.defaults | Add-Member -NotePropertyName models -NotePropertyValue ([pscustomobject]@{}) };" ^
-  "$json.agents.defaults.models | Add-Member -NotePropertyName 'claude-code-proxy/claude-opus-4-5' -NotePropertyValue ([pscustomobject]@{ alias = 'opus' }) -Force;" ^
+    "$json.agents.defaults.models | Add-Member -NotePropertyName 'claude-code-proxy/claude-opus-4-7' -NotePropertyValue ([pscustomobject]@{ alias = 'opus' }) -Force;" ^
+        "$json.agents.defaults.models | Add-Member -NotePropertyName 'claude-code-proxy/claude-opus-4-6' -NotePropertyValue ([pscustomobject]@{ alias = 'opus46' }) -Force;" ^
+        "$json.agents.defaults.models | Add-Member -NotePropertyName 'claude-code-proxy/claude-opus-4-5' -NotePropertyValue ([pscustomobject]@{ alias = 'opus45' }) -Force;" ^
   "$json.agents.defaults.models | Add-Member -NotePropertyName 'claude-code-proxy/claude-sonnet-4-5' -NotePropertyValue ([pscustomobject]@{ alias = 'sonnet' }) -Force;" ^
+    "$json.agents.defaults.models | Add-Member -NotePropertyName 'claude-code-proxy/claude-haiku-4-5' -NotePropertyValue ([pscustomobject]@{ alias = 'haiku' }) -Force;" ^
   "$json | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $path -Encoding UTF8"
 if errorlevel 1 (
     echo Failed to patch %OPENCLAW_CONFIG%
@@ -184,8 +187,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "if ($json.agents.defaults.llm -and $json.agents.defaults.llm.PSObject.Properties.Count -eq 0) { $json.agents.defaults.PSObject.Properties.Remove('llm') };" ^
     "if (-not $json.agents.defaults.models) { $json.agents.defaults | Add-Member -NotePropertyName models -NotePropertyValue ([pscustomobject]@{}) };" ^
     "$modelProps = $json.agents.defaults.models.PSObject.Properties.Name;" ^
+    "if ($modelProps -contains 'claude-code-proxy/claude-opus-4-7') { $json.agents.defaults.models.PSObject.Properties.Remove('claude-code-proxy/claude-opus-4-7') };" ^
+    "if ($modelProps -contains 'claude-code-proxy/claude-opus-4-6') { $json.agents.defaults.models.PSObject.Properties.Remove('claude-code-proxy/claude-opus-4-6') };" ^
     "if ($modelProps -contains 'claude-code-proxy/claude-opus-4-5') { $json.agents.defaults.models.PSObject.Properties.Remove('claude-code-proxy/claude-opus-4-5') };" ^
     "if ($modelProps -contains 'claude-code-proxy/claude-sonnet-4-5') { $json.agents.defaults.models.PSObject.Properties.Remove('claude-code-proxy/claude-sonnet-4-5') };" ^
+    "if ($modelProps -contains 'claude-code-proxy/claude-haiku-4-5') { $json.agents.defaults.models.PSObject.Properties.Remove('claude-code-proxy/claude-haiku-4-5') };" ^
     "$json | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $path -Encoding UTF8"
 if errorlevel 1 (
         echo Failed to remove proxy config entries from %OPENCLAW_CONFIG%
@@ -260,9 +266,15 @@ echo Proxy script: %INSTALLED_SCRIPT%
 echo Startup task: %TASK_NAME%
 echo.
 echo Suggested default model update:
+echo   agents.defaults.model.primary = claude-code-proxy/claude-opus-4-7
+echo   or
+echo   agents.defaults.model.primary = claude-code-proxy/claude-opus-4-6
+echo   or
 echo   agents.defaults.model.primary = claude-code-proxy/claude-opus-4-5
 echo   or
 echo   agents.defaults.model.primary = claude-code-proxy/claude-sonnet-4-5
+echo   or
+echo   agents.defaults.model.primary = claude-code-proxy/claude-haiku-4-5
 echo.
 echo Useful commands:
 echo   schtasks /Query /TN "%TASK_NAME%"

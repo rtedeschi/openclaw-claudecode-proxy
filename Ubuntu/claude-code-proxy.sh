@@ -435,16 +435,46 @@ patch_openclaw_config() {
         def proxy_models:
             [
                 {
+                    "id": "claude-opus-4-7",
+                    "name": "Claude Opus 4.7 (Proxy)",
+                    "api": "anthropic-messages",
+                    "reasoning": false,
+                    "input": ["text"],
+                    "cost": {
+                        "input": 5,
+                        "output": 25,
+                        "cacheRead": 0.5,
+                        "cacheWrite": 6.25
+                    },
+                    "contextWindow": 200000,
+                    "maxTokens": 8192
+                },
+                {
+                    "id": "claude-opus-4-6",
+                    "name": "Claude Opus 4.6 (Proxy)",
+                    "api": "anthropic-messages",
+                    "reasoning": false,
+                    "input": ["text"],
+                    "cost": {
+                        "input": 5,
+                        "output": 25,
+                        "cacheRead": 0.5,
+                        "cacheWrite": 6.25
+                    },
+                    "contextWindow": 200000,
+                    "maxTokens": 8192
+                },
+                {
                     "id": "claude-opus-4-5",
                     "name": "Claude Opus 4.5 (Proxy)",
                     "api": "anthropic-messages",
                     "reasoning": false,
                     "input": ["text"],
                     "cost": {
-                        "input": 0,
-                        "output": 0,
-                        "cacheRead": 0,
-                        "cacheWrite": 0
+                        "input": 5,
+                        "output": 25,
+                        "cacheRead": 0.5,
+                        "cacheWrite": 6.25
                     },
                     "contextWindow": 200000,
                     "maxTokens": 8192
@@ -456,10 +486,25 @@ patch_openclaw_config() {
                     "reasoning": false,
                     "input": ["text"],
                     "cost": {
-                        "input": 0,
-                        "output": 0,
-                        "cacheRead": 0,
-                        "cacheWrite": 0
+                        "input": 3,
+                        "output": 15,
+                        "cacheRead": 0.3,
+                        "cacheWrite": 3.75
+                    },
+                    "contextWindow": 200000,
+                    "maxTokens": 8192
+                },
+                {
+                    "id": "claude-haiku-4-5",
+                    "name": "Claude Haiku 4.5 (Proxy)",
+                    "api": "anthropic-messages",
+                    "reasoning": false,
+                    "input": ["text"],
+                    "cost": {
+                        "input": 1,
+                        "output": 5,
+                        "cacheRead": 0.1,
+                        "cacheWrite": 1.25
                     },
                     "contextWindow": 200000,
                     "maxTokens": 8192
@@ -481,8 +526,11 @@ patch_openclaw_config() {
         | .agents.defaults.llm //= {}
         | .agents.defaults.llm.idleTimeoutSeconds = ($timeout_seconds | tonumber)
         | .agents.defaults.models //= {}
-        | .agents.defaults.models["claude-code-proxy/claude-opus-4-5"] = { "alias": "opus" }
+        | .agents.defaults.models["claude-code-proxy/claude-opus-4-7"] = { "alias": "opus" }
+        | .agents.defaults.models["claude-code-proxy/claude-opus-4-6"] = { "alias": "opus46" }
+        | .agents.defaults.models["claude-code-proxy/claude-opus-4-5"] = { "alias": "opus45" }
         | .agents.defaults.models["claude-code-proxy/claude-sonnet-4-5"] = { "alias": "sonnet" }
+        | .agents.defaults.models["claude-code-proxy/claude-haiku-4-5"] = { "alias": "haiku" }
         ' "$OPENCLAW_CONFIG" > "$tmp_file"
 
     mv "$tmp_file" "$OPENCLAW_CONFIG"
@@ -512,8 +560,11 @@ remove_proxy_config_entries() {
                     else .
                     end
         | .agents.defaults.models = ((.agents.defaults.models // {})
+            | del(."claude-code-proxy/claude-opus-4-7")
+            | del(."claude-code-proxy/claude-opus-4-6")
             | del(."claude-code-proxy/claude-opus-4-5")
-            | del(."claude-code-proxy/claude-sonnet-4-5"))
+            | del(."claude-code-proxy/claude-sonnet-4-5")
+            | del(."claude-code-proxy/claude-haiku-4-5"))
         ' "$OPENCLAW_CONFIG" > "$tmp_file"
 
     mv "$tmp_file" "$OPENCLAW_CONFIG"
@@ -621,9 +672,15 @@ print_summary() {
     echo "User service: $SYSTEMD_SERVICE_PATH"
     echo ""
     echo "Suggested default model update:"
+    echo "  agents.defaults.model.primary = claude-code-proxy/claude-opus-4-7"
+    echo "  or"
+    echo "  agents.defaults.model.primary = claude-code-proxy/claude-opus-4-6"
+    echo "  or"
     echo "  agents.defaults.model.primary = claude-code-proxy/claude-opus-4-5"
     echo "  or"
     echo "  agents.defaults.model.primary = claude-code-proxy/claude-sonnet-4-5"
+    echo "  or"
+    echo "  agents.defaults.model.primary = claude-code-proxy/claude-haiku-4-5"
     echo ""
     echo "Useful commands:"
     echo "  ${INSTALLED_SCRIPT} status"

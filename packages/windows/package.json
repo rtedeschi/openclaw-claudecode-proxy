@@ -1,6 +1,6 @@
 {
   "name": "@rtedeschi/oc-claude-proxy-windows",
-  "version": "0.1.20",
+  "version": "0.1.21",
   "description": "Install and manage the OpenClaw Claude Code proxy as a startup task on Windows.",
   "license": "MIT",
   "bin": {

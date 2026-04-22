@@ -215,7 +215,7 @@ The Ubuntu entrypoint in `install` mode performs the following actions:
 5. Copies the platform script and shared JS entrypoint to the target OpenClaw workspace on Linux or `%USERPROFILE%\.openclaw\workspace\scripts\` on Windows.
 6. Adds or updates `models.providers["claude-code-proxy"]` in `openclaw.json`.
 7. Sets `agents.defaults.timeoutSeconds = 900` and `agents.defaults.llm.idleTimeoutSeconds = 900` so OpenClaw matches the proxy request timeout and idle timeout.
-8. Adds alias entries for `claude-code-proxy/claude-opus-4-5` and `claude-code-proxy/claude-sonnet-4-5`.
+8. Adds alias entries for `claude-code-proxy/claude-opus-4-7`, `claude-code-proxy/claude-sonnet-4-5`, and `claude-code-proxy/claude-haiku-4-5`.
 9. Installs persistent startup.
 Ubuntu uses a user `systemd` service.
 Windows uses a Scheduled Task named `ClaudeCodeProxy`.
@@ -239,16 +239,18 @@ It does set `agents.defaults.timeoutSeconds` to `900` and `agents.defaults.llm.i
 After setup, OpenClaw has this proxy provider available:
 
 - Provider: `claude-code-proxy`
-- Available model IDs: `claude-code-proxy/claude-opus-4-5` and `claude-code-proxy/claude-sonnet-4-5`
+- Available model IDs: `claude-code-proxy/claude-opus-4-7`, `claude-code-proxy/claude-opus-4-6`, `claude-code-proxy/claude-opus-4-5`, `claude-code-proxy/claude-sonnet-4-5`, and `claude-code-proxy/claude-haiku-4-5`
 
 Suggested default model change:
 
-- `agents.defaults.model.primary = claude-code-proxy/claude-opus-4-5`
+- `agents.defaults.model.primary = claude-code-proxy/claude-opus-4-7`
+- or `agents.defaults.model.primary = claude-code-proxy/claude-opus-4-6`
+- or `agents.defaults.model.primary = claude-code-proxy/claude-opus-4-5`
 - or `agents.defaults.model.primary = claude-code-proxy/claude-sonnet-4-5`
+- or `agents.defaults.model.primary = claude-code-proxy/claude-haiku-4-5`
 
 The proxy also normalizes these requested model names if they are sent by clients:
 
-- `claude-opus-4-6` -> `claude-opus-4-5`
 - `claude-sonnet-4-6` -> `claude-sonnet-4-5`
 - `claude-haiku-4-6` -> `claude-haiku-4-5`
 
