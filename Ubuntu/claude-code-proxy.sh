@@ -31,7 +31,7 @@ DEFAULT_PORT="${PROXY_PORT:-8787}"
 if [ -n "${OC_PROXY_REQUEST_TIMEOUT_MS:-}" ]; then
     DEFAULT_TIMEOUT_SECONDS="$(( (OC_PROXY_REQUEST_TIMEOUT_MS + 999) / 1000 ))"
 else
-    DEFAULT_TIMEOUT_SECONDS="${OC_PROXY_TIMEOUT_SECONDS:-900}"
+    DEFAULT_TIMEOUT_SECONDS="${OC_PROXY_TIMEOUT_SECONDS:-1800}"
 fi
 DEFAULT_LOG_LINES="${OC_PROXY_LOG_LINES:-200}"
 NO_PAUSE="${OC_PROXY_NO_PAUSE:-0}"
@@ -435,6 +435,21 @@ patch_openclaw_config() {
         def proxy_models:
             [
                 {
+                    "id": "claude-opus-4-8",
+                    "name": "Claude Opus 4.8 (Proxy)",
+                    "api": "anthropic-messages",
+                    "reasoning": false,
+                    "input": ["text"],
+                    "cost": {
+                        "input": 5,
+                        "output": 25,
+                        "cacheRead": 0.5,
+                        "cacheWrite": 6.25
+                    },
+                    "contextWindow": 1000000,
+                    "maxTokens": 8192
+                },
+                {
                     "id": "claude-opus-4-7",
                     "name": "Claude Opus 4.7 (Proxy)",
                     "api": "anthropic-messages",
@@ -446,7 +461,7 @@ patch_openclaw_config() {
                         "cacheRead": 0.5,
                         "cacheWrite": 6.25
                     },
-                    "contextWindow": 200000,
+                    "contextWindow": 1000000,
                     "maxTokens": 8192
                 },
                 {
@@ -461,7 +476,7 @@ patch_openclaw_config() {
                         "cacheRead": 0.5,
                         "cacheWrite": 6.25
                     },
-                    "contextWindow": 200000,
+                    "contextWindow": 1000000,
                     "maxTokens": 8192
                 },
                 {
@@ -526,6 +541,7 @@ patch_openclaw_config() {
         | .agents.defaults.llm //= {}
         | .agents.defaults.llm.idleTimeoutSeconds = ($timeout_seconds | tonumber)
         | .agents.defaults.models //= {}
+        | .agents.defaults.models["claude-code-proxy/claude-opus-4-8"] = { "alias": "opus48" }
         | .agents.defaults.models["claude-code-proxy/claude-opus-4-7"] = { "alias": "opus" }
         | .agents.defaults.models["claude-code-proxy/claude-opus-4-6"] = { "alias": "opus46" }
         | .agents.defaults.models["claude-code-proxy/claude-opus-4-5"] = { "alias": "opus45" }
@@ -560,6 +576,7 @@ remove_proxy_config_entries() {
                     else .
                     end
         | .agents.defaults.models = ((.agents.defaults.models // {})
+            | del(."claude-code-proxy/claude-opus-4-8")
             | del(."claude-code-proxy/claude-opus-4-7")
             | del(."claude-code-proxy/claude-opus-4-6")
             | del(."claude-code-proxy/claude-opus-4-5")
