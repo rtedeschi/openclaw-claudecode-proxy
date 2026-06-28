@@ -1386,7 +1386,24 @@ const server = http.createServer(async (req, res) => {
 
 server.requestTimeout = Number.isFinite(REQUEST_TIMEOUT_MS) && REQUEST_TIMEOUT_MS > 0
     ? REQUEST_TIMEOUT_MS
-    : 900000;
+    : 1800000;
+
+// Pin the remaining HTTP server timeouts explicitly. Left unset, these fall back
+// to Node defaults that vary by version and can drop a connection mid-generation:
+//   - server.timeout (socket inactivity): default 0 in modern Node, but pin it
+//     to 0 so a long, quiet generation is never killed by socket inactivity.
+//   - server.headersTimeout: default 60s; harmless here (loopback only) but pin
+//     to 0 so it can never race the request.
+//   - server.keepAliveTimeout: default 5s, which drops OpenClaw's pooled
+//     connections between turns and forces reconnects that can surface as
+//     timeouts. Raise it so the keep-alive socket survives idle gaps.
+const SOCKET_TIMEOUT_MS = Number.parseInt(process.env.OC_PROXY_SOCKET_TIMEOUT_MS || '0', 10);
+const HEADERS_TIMEOUT_MS = Number.parseInt(process.env.OC_PROXY_HEADERS_TIMEOUT_MS || '0', 10);
+const KEEPALIVE_TIMEOUT_MS = Number.parseInt(process.env.OC_PROXY_KEEPALIVE_TIMEOUT_MS || '75000', 10);
+
+server.timeout = Number.isFinite(SOCKET_TIMEOUT_MS) && SOCKET_TIMEOUT_MS >= 0 ? SOCKET_TIMEOUT_MS : 0;
+server.headersTimeout = Number.isFinite(HEADERS_TIMEOUT_MS) && HEADERS_TIMEOUT_MS >= 0 ? HEADERS_TIMEOUT_MS : 0;
+server.keepAliveTimeout = Number.isFinite(KEEPALIVE_TIMEOUT_MS) && KEEPALIVE_TIMEOUT_MS > 0 ? KEEPALIVE_TIMEOUT_MS : 75000;
 
 server.on('timeout', (socket) => {
     debugLog({
