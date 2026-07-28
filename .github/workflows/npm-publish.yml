@@ -1,6 +1,9 @@
 name: Publish npm packages
 
 on:
+  push:
+    branches:
+      - main
   release:
     types:
       - published
