@@ -49,13 +49,30 @@ jobs:
             exit 1
           fi
 
+      - name: Check whether ${{ matrix.package.name }} version is already published
+        id: check
+        run: |
+          set -euo pipefail
+          cd "${{ matrix.package.directory }}"
+          NAME="$(node -p "require('./package.json').name")"
+          VERSION="$(node -p "require('./package.json').version")"
+          if npm view "$NAME@$VERSION" version --registry https://registry.npmjs.org >/dev/null 2>&1; then
+            echo "$NAME@$VERSION already on npm — skipping publish."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "$NAME@$VERSION not found on npm — will publish."
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Verify ${{ matrix.package.name }} npm package contents
+        if: steps.check.outputs.skip == 'false'
         run: |
           set -euo pipefail
           cd "${{ matrix.package.directory }}"
           npm pack --dry-run
 
       - name: Publish ${{ matrix.package.name }} to npm
+        if: steps.check.outputs.skip == 'false'
         run: |
           set -euo pipefail
           cd "${{ matrix.package.directory }}"
