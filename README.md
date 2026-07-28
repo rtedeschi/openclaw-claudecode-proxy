@@ -214,7 +214,7 @@ The Ubuntu entrypoint in `install` mode performs the following actions:
 4. Resolves the target OpenClaw installation on Ubuntu by checking the invoking user's `~/.openclaw/openclaw.json` first and `/root/.openclaw/openclaw.json` second.
 5. Copies the platform script and shared JS entrypoint to the target OpenClaw workspace on Linux or `%USERPROFILE%\.openclaw\workspace\scripts\` on Windows.
 6. Adds or updates `models.providers["claude-code-proxy"]` in `openclaw.json`.
-7. Sets `agents.defaults.timeoutSeconds = 1800` and `agents.defaults.llm.idleTimeoutSeconds = 1800` so OpenClaw matches the proxy request timeout and idle timeout.
+7. Sets `agents.defaults.timeoutSeconds = 1800` so OpenClaw matches the proxy request timeout.
 8. Adds alias entries for `claude-code-proxy/claude-opus-4-8`, `claude-code-proxy/claude-opus-4-7`, `claude-code-proxy/claude-sonnet-4-5`, and `claude-code-proxy/claude-haiku-4-5`.
 9. Installs persistent startup.
 Ubuntu uses a user `systemd` service.
@@ -232,7 +232,7 @@ At runtime, the proxy composes each turn statelessly from:
 
 The script does not automatically change `agents.defaults.model.primary`.
 It prints a suggestion to set it to one of the proxy-backed models after install.
-It does set `agents.defaults.timeoutSeconds` to `1800` and `agents.defaults.llm.idleTimeoutSeconds` to `1800` so OpenClaw's timeout settings match the proxy request timeout and idle timeout.
+It does set `agents.defaults.timeoutSeconds` to `1800` so OpenClaw's timeout setting matches the proxy request timeout.
 
 ## Installed model mapping
 
@@ -301,7 +301,7 @@ http://localhost:8787
 
 If you used a custom `PROXY_PORT`, substitute that value.
 
-The proxy request timeout is explicitly set to `1800` seconds by default, and the installers write the same value to `agents.defaults.timeoutSeconds` and `agents.defaults.llm.idleTimeoutSeconds`.
+The proxy request timeout is explicitly set to `1800` seconds by default, and the installers write the same value to `agents.defaults.timeoutSeconds`.
 
 ## Uninstall and cleanup
 

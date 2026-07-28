@@ -57,7 +57,7 @@ echo   claude-code-proxy.bat uninstall
 echo   claude-code-proxy.bat serve [port]
 echo.
 echo Modes:
-echo   install  Install the proxy, patch openclaw.json, set timeoutSeconds and llm.idleTimeoutSeconds, register a startup task, and start it.
+echo   install  Install the proxy, patch openclaw.json, set timeoutSeconds, register a startup task, and start it.
 echo   uninstall Remove the startup task, clean OpenClaw proxy config entries, and delete installed files.
 echo   serve    Run the proxy in the foreground. This is the mode used by the scheduled task.
 call :pause_if_requested
@@ -153,8 +153,6 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "if (-not $json.agents) { $json | Add-Member -NotePropertyName agents -NotePropertyValue ([pscustomobject]@{}) };" ^
   "if (-not $json.agents.defaults) { $json.agents | Add-Member -NotePropertyName defaults -NotePropertyValue ([pscustomobject]@{}) };" ^
     "$json.agents.defaults | Add-Member -NotePropertyName timeoutSeconds -NotePropertyValue $timeoutSeconds -Force;" ^
-    "if (-not $json.agents.defaults.llm) { $json.agents.defaults | Add-Member -NotePropertyName llm -NotePropertyValue ([pscustomobject]@{}) };" ^
-    "$json.agents.defaults.llm | Add-Member -NotePropertyName idleTimeoutSeconds -NotePropertyValue $timeoutSeconds -Force;" ^
   "if (-not $json.agents.defaults.models) { $json.agents.defaults | Add-Member -NotePropertyName models -NotePropertyValue ([pscustomobject]@{}) };" ^
     "$json.agents.defaults.models | Add-Member -NotePropertyName 'claude-code-proxy/claude-opus-4-8' -NotePropertyValue ([pscustomobject]@{ alias = 'opus48' }) -Force;" ^
         "$json.agents.defaults.models | Add-Member -NotePropertyName 'claude-code-proxy/claude-opus-4-7' -NotePropertyValue ([pscustomobject]@{ alias = 'opus' }) -Force;" ^
@@ -184,8 +182,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "if (-not $json.agents) { $json | Add-Member -NotePropertyName agents -NotePropertyValue ([pscustomobject]@{}) };" ^
     "if (-not $json.agents.defaults) { $json.agents | Add-Member -NotePropertyName defaults -NotePropertyValue ([pscustomobject]@{}) };" ^
     "if ($null -ne $json.agents.defaults.timeoutSeconds -and [int]$json.agents.defaults.timeoutSeconds -eq $timeoutSeconds) { $json.agents.defaults.PSObject.Properties.Remove('timeoutSeconds') };" ^
-    "if ($json.agents.defaults.llm -and $null -ne $json.agents.defaults.llm.idleTimeoutSeconds -and [int]$json.agents.defaults.llm.idleTimeoutSeconds -eq $timeoutSeconds) { $json.agents.defaults.llm.PSObject.Properties.Remove('idleTimeoutSeconds') };" ^
-    "if ($json.agents.defaults.llm -and $json.agents.defaults.llm.PSObject.Properties.Count -eq 0) { $json.agents.defaults.PSObject.Properties.Remove('llm') };" ^
+    "if ($json.agents.defaults.PSObject.Properties.Name -contains 'llm') { $json.agents.defaults.PSObject.Properties.Remove('llm') };" ^
     "if (-not $json.agents.defaults.models) { $json.agents.defaults | Add-Member -NotePropertyName models -NotePropertyValue ([pscustomobject]@{}) };" ^
     "$modelProps = $json.agents.defaults.models.PSObject.Properties.Name;" ^
     "if ($modelProps -contains 'claude-code-proxy/claude-opus-4-8') { $json.agents.defaults.models.PSObject.Properties.Remove('claude-code-proxy/claude-opus-4-8') };" ^
@@ -263,7 +260,6 @@ echo Deployment complete
 echo.
 echo Installed provider: claude-code-proxy -^> http://localhost:%PORT%
 echo Configured timeoutSeconds: %DEFAULT_TIMEOUT_SECONDS%
-echo Configured llm.idleTimeoutSeconds: %DEFAULT_TIMEOUT_SECONDS%
 echo Proxy script: %INSTALLED_SCRIPT%
 echo Startup task: %TASK_NAME%
 echo.
@@ -314,7 +310,7 @@ echo Claude Code Proxy Setup for OpenClaw
 echo ====================================
 echo.
 echo This installs the proxy startup task on port %PORT%, patches openclaw.json, and starts the task.
-echo OpenClaw timeoutSeconds and llm.idleTimeoutSeconds will be set to %DEFAULT_TIMEOUT_SECONDS% to match the proxy request timeout.
+echo OpenClaw timeoutSeconds will be set to %DEFAULT_TIMEOUT_SECONDS% to match the proxy request timeout.
 echo.
 if not exist "%OPENCLAW_CONFIG%" (
     echo OpenClaw config not found at %OPENCLAW_CONFIG%
