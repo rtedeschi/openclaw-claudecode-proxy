@@ -1,6 +1,6 @@
 {
   "name": "@rtedeschi/oc-claude-proxy-windows",
-  "version": "0.1.24",
+  "version": "0.1.25",
   "description": "Install and manage the OpenClaw Claude Code proxy as a startup task on Windows.",
   "license": "MIT",
   "bin": {
@@ -45,6 +45,7 @@
   },
   "homepage": "https://github.com/rtedeschi/openclaw-claudecode-proxy#readme",
   "publishConfig": {
-    "registry": "https://npm.pkg.github.com"
+    "registry": "https://registry.npmjs.org",
+    "access": "public"
   }
 }
